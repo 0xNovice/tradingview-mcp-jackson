@@ -53,15 +53,72 @@ stoch_k        = input.int(3,      "Stoch RSI K",         group="Exit")
 stoch_d        = input.int(3,      "Stoch RSI D",         group="Exit")
 ob_level       = input.int(80,     "Stoch RSI Overbought Level", group="Exit")
 
-// ─── SESSION FILTER (EST) ─────────────────────────────────────────────────────
-// Sam's best times: Mon night 6–9pm, Tue–Wed 7am–12pm EST
-// Avoid: weekends, holidays, Thursdays (higher risk)
-use_session    = input.bool(true, "Filter by High-Liquidity Sessions", group="Session Filter")
-// New York session 8am–5pm EST = 1300–2200 UTC
-// London session  3am–12pm EST = 0800–1700 UTC
-ny_session     = "0800-1700"   // London/NY overlap (highest liquidity window)
+// ─── SESSION FILTER (EST / UTC-5, EDT / UTC-4 during DST) ───────────────────
+// All times below are UTC strings (TradingView time() uses UTC)
+//
+// Session         EST               UTC (standard)   UTC (DST/EDT)
+// ─────────────── ──────────────── ──────────────── ────────────────
+// Sydney          5:00 PM–2:00 AM  22:00–07:00      21:00–06:00
+// Tokyo/Asia      7:00 PM–4:00 AM  00:00–09:00      23:00–08:00
+// Frankfurt pre   2:00 AM–3:00 AM  07:00–08:00      06:00–07:00
+// London          3:00 AM–12:00 PM 08:00–17:00      07:00–16:00
+// Tokyo-London OL 3:00 AM–4:00 AM  08:00–09:00      07:00–08:00
+// New York        8:00 AM–5:00 PM  13:00–22:00      12:00–21:00
+// London-NY OL    8:00 AM–12:00 PM 13:00–17:00      12:00–16:00  ← BEST
+// Sam Mon night   6:00 PM–9:00 PM  23:00–02:00      22:00–01:00
+// Sam Tue–Wed     7:00 AM–12:00 PM 12:00–17:00      11:00–16:00
+//
+// DST Note: US DST (Mar–Nov) shifts EST→EDT (UTC-4).
+//   UK/EU DST typically aligns but transitions differ in Mar/Apr & Oct/Nov.
+//   During those weeks verify overlaps shift by 1 hour.
 
-in_session = not use_session or (time(timeframe.period, ny_session) != 0)
+use_session      = input.bool(true,  "Enable Session Filter",                  group="Session Filter")
+show_sess_bg     = input.bool(true,  "Highlight Sessions on Chart",             group="Session Filter")
+use_london_ny    = input.bool(true,  "London–NY Overlap (Best — 8am–12pm EST)", group="Session Filter")
+use_london       = input.bool(true,  "London Session (3am–12pm EST)",           group="Session Filter")
+use_ny           = input.bool(true,  "New York Session (8am–5pm EST)",          group="Session Filter")
+use_tokyo        = input.bool(false, "Tokyo/Asia Session (7pm–4am EST)",        group="Session Filter")
+use_sydney       = input.bool(false, "Sydney Session (5pm–2am EST)",            group="Session Filter")
+use_sam_mon      = input.bool(true,  "Sam's Monday Night (6pm–9pm EST)",        group="Session Filter")
+use_sam_tueswed  = input.bool(true,  "Sam's Tue–Wed Morning (7am–12pm EST)",    group="Session Filter")
+warn_thursday    = input.bool(true,  "Warn on Thursdays (Higher Risk)",         group="Session Filter")
+
+// UTC session strings (standard time — adjust 1hr earlier during DST)
+london_ny_utc   = "1300-1700"   // London–NY overlap, peak liquidity
+london_utc      = "0800-1700"   // Full London session
+ny_utc          = "1300-2200"   // Full New York session
+tokyo_utc       = "0000-0900"   // Tokyo/Asia session
+sydney_utc      = "2200-0700"   // Sydney session
+sam_mon_utc     = "2300-0200"   // Sam's Monday night sweet spot
+sam_tueswed_utc = "1200-1700"   // Sam's Tue–Wed morning window
+
+in_london_ny  = time(timeframe.period, london_ny_utc)  != 0
+in_london     = time(timeframe.period, london_utc)     != 0
+in_ny         = time(timeframe.period, ny_utc)         != 0
+in_tokyo      = time(timeframe.period, tokyo_utc)      != 0
+in_sydney     = time(timeframe.period, sydney_utc)     != 0
+in_sam_mon    = time(timeframe.period, sam_mon_utc)    != 0
+in_sam_tw     = time(timeframe.period, sam_tueswed_utc) != 0
+
+is_thursday   = dayofweek == dayofweek.thursday
+is_weekend    = dayofweek == dayofweek.saturday or dayofweek == dayofweek.sunday
+
+active_session = (use_london_ny   and in_london_ny)  or
+                 (use_london       and in_london)      or
+                 (use_ny           and in_ny)          or
+                 (use_tokyo        and in_tokyo)        or
+                 (use_sydney       and in_sydney)       or
+                 (use_sam_mon      and in_sam_mon)      or
+                 (use_sam_tueswed  and in_sam_tw)
+
+in_session = not use_session or (active_session and not is_weekend)
+
+// Session background highlights
+bgcolor(show_sess_bg and in_london_ny ? color.new(color.green,  88) : na, title="London–NY Overlap")
+bgcolor(show_sess_bg and in_london and not in_london_ny ? color.new(color.blue, 92) : na, title="London Session")
+bgcolor(show_sess_bg and in_ny     and not in_london_ny ? color.new(color.aqua, 92) : na, title="NY Session")
+bgcolor(show_sess_bg and in_tokyo  and not in_london    ? color.new(color.orange, 93) : na, title="Tokyo Session")
+bgcolor(show_sess_bg and is_weekend ? color.new(color.gray, 85) : na, title="Weekend — No Trade")
 
 // ─── MACRO BIAS ──────────────────────────────────────────────────────────────
 bull_bias        = close > ma200
@@ -182,7 +239,7 @@ plotshape(exit_bear_flip,   title="Bear Flip",     location=location.abovebar, s
 plotshape(above_smooth_cross, title="Above Smooth", location=location.belowbar, style=shape.diamond,    color=color.new(color.teal,   0), size=size.tiny,   text="SMT")
 
 // ─── RISK DASHBOARD (TABLE) ──────────────────────────────────────────────────
-var table risk_table = table.new(position.top_right, 2, 7, border_width=1)
+var table risk_table = table.new(position.top_right, 2, 9, border_width=1)
 
 if show_risk_table and barstate.islast
     table.cell(risk_table, 0, 0, "RISK DASHBOARD",    text_color=color.white, bgcolor=color.new(color.blue,  20), text_size=size.small)
@@ -199,6 +256,10 @@ if show_risk_table and barstate.islast
     table.cell(risk_table, 1, 5, str.tostring(gap_from_21, "#.##") + "%",     text_color=gap_from_21 >= gap_pct ? color.red : color.green, bgcolor=color.new(color.gray, 70), text_size=size.small)
     table.cell(risk_table, 0, 6, "Bias",              text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
     table.cell(risk_table, 1, 6, bull_bias ? "BULL" : "BEAR",                 text_color=bull_bias ? color.green : color.red, bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 7, "Session",           text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 7, in_london_ny ? "LDN-NY (BEST)" : in_london ? "London" : in_ny ? "New York" : in_tokyo ? "Tokyo" : in_sydney ? "Sydney" : is_weekend ? "WEEKEND" : "Off-Hours", text_color=in_london_ny ? color.green : is_weekend ? color.red : color.yellow, bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 8, "Thu Risk",          text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 8, warn_thursday and is_thursday ? "CAUTION" : "OK", text_color=warn_thursday and is_thursday ? color.orange : color.green, bgcolor=color.new(color.gray, 70), text_size=size.small)
 
 // ─── ALERTS ──────────────────────────────────────────────────────────────────
 alertcondition(entry_fireworks,      title="Fireworks Entry",         message="FIREWORKS — Crossed 200 recently, now touching 21. Strong long setup.")
