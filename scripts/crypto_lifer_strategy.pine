@@ -1,53 +1,75 @@
 // @version=5
 // Crypto Lifer Strategy — Sam Price
-// Based on: 200 SMA macro bias + 21 SMA entry/exit timing
-// "Twisted Sister" setup: 200 SMA cross → pullback to 21 → gap away = take profit
+// Part 1: 200 SMA macro bias + 21 SMA entry/exit timing ("Twisted Sister")
+// Part 2: Leverage class — risk management, session filter, smooth MA, position sizing
 // Polish notes left as TODO comments
 
 strategy(
-     title       = "Crypto Lifer — 200/21 SMA Strategy",
-     shorttitle  = "CL_200_21",
-     overlay     = true,
-     default_qty_type  = strategy.percent_of_equity,
-     default_qty_value = 10,
+     title             = "Crypto Lifer — Full Strategy",
+     shorttitle        = "CL_FULL",
+     overlay           = true,
+     default_qty_type  = strategy.fixed,
+     default_qty_value = 1,
      commission_type   = strategy.commission.percent,
      commission_value  = 0.05,
      initial_capital   = 10000
  )
 
-// ─── INPUTS ──────────────────────────────────────────────────────────────────
+// ─── MOVING AVERAGES ─────────────────────────────────────────────────────────
 ma21_len   = input.int(21,  "21 SMA Length",  group="Moving Averages")
 ma50_len   = input.int(50,  "50 SMA Length",  group="Moving Averages")
 ma80_len   = input.int(80,  "80 SMA Length",  group="Moving Averages")
 ma100_len  = input.int(100, "100 SMA Length", group="Moving Averages")
 ma200_len  = input.int(200, "200 SMA Length", group="Moving Averages")
+smooth_len = input.int(50,  "Smooth MA Length (SMMA)", group="Moving Averages")
 
-gap_pct    = input.float(2.5, "Gap Away from 21 SMA % (Take Profit)", minval=0.5, maxval=20, step=0.5, group="Exit")
-stoch_len  = input.int(14,   "Stoch RSI Length",  group="Exit")
-stoch_k    = input.int(3,    "Stoch RSI K",        group="Exit")
-stoch_d    = input.int(3,    "Stoch RSI D",        group="Exit")
-ob_level   = input.int(80,   "Stoch RSI Overbought Level", group="Exit")
+ma21   = ta.sma(close, ma21_len)
+ma50   = ta.sma(close, ma50_len)
+ma80   = ta.sma(close, ma80_len)
+ma100  = ta.sma(close, ma100_len)
+ma200  = ta.sma(close, ma200_len)
 
-fib_786    = input.bool(true, "Show Fib 0.786 Level",        group="Fibonacci")
-fib_golden = input.bool(true, "Show Fib Golden Pocket 0.618–0.65", group="Fibonacci")
-lookback   = input.int(50,   "Swing Lookback for Fib",       group="Fibonacci")
+// Smooth MA (SMMA / RMA) — Sam's "smooth moving average", strong signal when price gets above it
+smooth_ma = ta.rma(close, smooth_len)
 
-// ─── MOVING AVERAGES ─────────────────────────────────────────────────────────
-ma21  = ta.sma(close, ma21_len)
-ma50  = ta.sma(close, ma50_len)
-ma80  = ta.sma(close, ma80_len)
-ma100 = ta.sma(close, ma100_len)
-ma200 = ta.sma(close, ma200_len)
+plot(ma21,     "21 SMA",    color=color.white,                linewidth=2)
+plot(ma50,     "50 SMA",    color=color.red,                  linewidth=1)
+plot(ma80,     "80 SMA",    color=color.purple,               linewidth=1)
+plot(ma100,    "100 SMA",   color=color.blue,                 linewidth=1)
+plot(ma200,    "200 SMA",   color=color.yellow,               linewidth=2)
+plot(smooth_ma,"Smooth MA", color=color.new(color.teal, 20),  linewidth=2)
 
-plot(ma21,  "21 SMA",  color=color.white,  linewidth=2)
-plot(ma50,  "50 SMA",  color=color.red,    linewidth=1)
-plot(ma80,  "80 SMA",  color=color.purple, linewidth=1)
-plot(ma100, "100 SMA", color=color.blue,   linewidth=1)
-plot(ma200, "200 SMA", color=color.yellow, linewidth=2)
+// ─── RISK MANAGEMENT ─────────────────────────────────────────────────────────
+account_size   = input.float(10000, "Account Size (USD)",        group="Risk Management")
+risk_pct       = input.float(1.0,   "Risk Per Trade %",  minval=0.1, maxval=5, step=0.1, group="Risk Management")
+rr_ratio       = input.float(3.0,   "Risk:Reward Target", minval=1, maxval=10, step=0.5,  group="Risk Management")
+show_risk_table= input.bool(true,   "Show Risk Dashboard",        group="Risk Management")
+
+// ─── EXIT SETTINGS ────────────────────────────────────────────────────────────
+gap_pct        = input.float(2.5,  "Gap Away from 21 SMA % (Take Profit)", minval=0.5, maxval=20, step=0.5, group="Exit")
+partial_pct    = input.float(75.0, "Partial Exit % at first gap",           minval=10,  maxval=100, step=5,   group="Exit")
+stoch_len      = input.int(14,     "Stoch RSI Length",   group="Exit")
+stoch_k        = input.int(3,      "Stoch RSI K",         group="Exit")
+stoch_d        = input.int(3,      "Stoch RSI D",         group="Exit")
+ob_level       = input.int(80,     "Stoch RSI Overbought Level", group="Exit")
+
+// ─── SESSION FILTER (EST) ─────────────────────────────────────────────────────
+// Sam's best times: Mon night 6–9pm, Tue–Wed 7am–12pm EST
+// Avoid: weekends, holidays, Thursdays (higher risk)
+use_session    = input.bool(true, "Filter by High-Liquidity Sessions", group="Session Filter")
+// New York session 8am–5pm EST = 1300–2200 UTC
+// London session  3am–12pm EST = 0800–1700 UTC
+ny_session     = "0800-1700"   // London/NY overlap (highest liquidity window)
+
+in_session = not use_session or (time(timeframe.period, ny_session) != 0)
 
 // ─── MACRO BIAS ──────────────────────────────────────────────────────────────
-bull_bias = close > ma200   // Above 200 SMA = bullish
-bear_bias = close < ma200   // Below 200 SMA = bearish
+bull_bias        = close > ma200
+bear_bias        = close < ma200
+above_smooth     = close > smooth_ma
+above_200_cross  = ta.crossover(close, ma200)
+below_200_cross  = ta.crossunder(close, ma200)
+above_smooth_cross = ta.crossover(close, smooth_ma)
 
 bgcolor(bull_bias ? color.new(color.green, 95) : color.new(color.red, 95), title="Bias Background")
 
@@ -57,80 +79,144 @@ gapped_above_21 = close > ma21 and gap_from_21 >= gap_pct
 gapped_below_21 = close < ma21 and gap_from_21 >= gap_pct
 
 // ─── STOCHASTIC RSI ──────────────────────────────────────────────────────────
-rsi_val     = ta.rsi(close, stoch_len)
-stoch_raw   = ta.stoch(rsi_val, rsi_val, rsi_val, stoch_len)
-k           = ta.sma(stoch_raw, stoch_k)
-d           = ta.sma(k, stoch_d)
-overbought  = k >= ob_level and d >= ob_level
+rsi_val    = ta.rsi(close, stoch_len)
+stoch_raw  = ta.stoch(rsi_val, rsi_val, rsi_val, stoch_len)
+k          = ta.sma(stoch_raw, stoch_k)
+d          = ta.sma(k, stoch_d)
+overbought = k >= ob_level and d >= ob_level
+oversold   = k <= (100 - ob_level) and d <= (100 - ob_level)
 
-// ─── ENTRY CONDITIONS (LONG) ─────────────────────────────────────────────────
-// 1. Price above 200 SMA (macro bullish)
-// 2. Price touches/crosses the 21 SMA from below (pullback entry)
-// 3. "Fireworks": price just crossed back above 200 then touched 21
+// ─── ENTRY CONDITIONS ────────────────────────────────────────────────────────
 touched_21_from_below = ta.crossover(close, ma21)
-above_200_cross        = ta.crossover(close, ma200)
+touched_21_from_above = ta.crossunder(close, ma21)
 
-// Standard pullback to 21 entry
-entry_pullback = bull_bias and touched_21_from_below
+bars_since_200_cross  = ta.barssince(above_200_cross)
 
-// "Fireworks" setup: crossed 200 recently (within 10 bars) + touching 21
-bars_since_200_cross = ta.barssince(above_200_cross)
-entry_fireworks      = bull_bias and touched_21_from_below and bars_since_200_cross <= 10
+// "Fireworks": crossed 200 recently + touching 21 (strongest setup)
+entry_fireworks = bull_bias and touched_21_from_below and bars_since_200_cross <= 10 and in_session
+
+// Standard pullback to 21 while above 200
+entry_pullback  = bull_bias and touched_21_from_below and not entry_fireworks and in_session
+
+// "Smooth Boost": above smooth MA + touching 21 = extended target possible (113–118)
+entry_smooth_boost = bull_bias and above_smooth and touched_21_from_below and in_session
+
+// Short-side: below 200, gap below 21 (mirror of long)
+entry_short = bear_bias and touched_21_from_above and in_session
+
+// ─── STOP LOSS LOGIC ─────────────────────────────────────────────────────────
+// Sam: stop loss goes below the 200 SMA (or below smooth MA for extended targets)
+// Keep liquidation price well away — prefer 30–40x leverage, isolated margin
+stop_below_200  = ma200 * 0.999   // just below the yellow line
+stop_below_smooth = smooth_ma * 0.999
+
+// ─── RISK CALCULATOR ─────────────────────────────────────────────────────────
+// Computes position size from account + risk % + stop distance
+risk_dollars    = account_size * (risk_pct / 100)
+atr_val         = ta.atr(14)
+stop_dist_pct   = (close - stop_below_200) / close * 100
+tp_dist_pct     = stop_dist_pct * rr_ratio
+tp_price        = close * (1 + tp_dist_pct / 100)
 
 // ─── EXIT CONDITIONS ──────────────────────────────────────────────────────────
-// 1. Gapped far above 21 SMA (extended, take profits)
-// 2. Stoch RSI overbought on current timeframe
-// 3. Fell back below 200 SMA (macro bias flip — kill trade)
 exit_gap_profit  = gapped_above_21
 exit_overbought  = gapped_above_21 and overbought
-exit_bear_flip   = ta.crossunder(close, ma200)
+exit_bear_flip   = below_200_cross
+exit_short_cover = above_200_cross or (gapped_below_21 and oversold)
 
 // ─── STRATEGY EXECUTION ──────────────────────────────────────────────────────
-if entry_pullback and strategy.position_size == 0
+var bool partial_taken = false
+
+if (entry_fireworks or entry_smooth_boost) and strategy.position_size == 0
+    strategy.entry("Long_Fireworks", strategy.long, comment="Fireworks/Smooth")
+    partial_taken := false
+
+else if entry_pullback and strategy.position_size == 0
     strategy.entry("Long_Pullback", strategy.long, comment="21 Touch")
+    partial_taken := false
 
-if entry_fireworks and strategy.position_size == 0
-    strategy.entry("Long_Fireworks", strategy.long, comment="Fireworks")
+if entry_short and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, comment="Short 21 Touch")
 
-if exit_overbought
-    strategy.close_all(comment="Gap+OB Exit")
-else if exit_gap_profit
-    strategy.close_all(comment="Gap Exit")
+// Partial exit at first gap (default 75% off, keep runner)
+if exit_gap_profit and strategy.position_size > 0 and not partial_taken
+    strategy.close("Long_Fireworks", qty_percent=partial_pct, comment="Partial Gap Exit")
+    strategy.close("Long_Pullback",  qty_percent=partial_pct, comment="Partial Gap Exit")
+    partial_taken := true
 
-if exit_bear_flip
-    strategy.close_all(comment="Bear Flip")
+// Full exit when overbought + gapped
+if exit_overbought and strategy.position_size > 0
+    strategy.close_all(comment="Gap+OB Full Exit")
+    partial_taken := false
 
-// ─── FIBONACCI LEVELS (SWING HIGH/LOW) ───────────────────────────────────────
-swing_high = ta.highest(high, lookback)
-swing_low  = ta.lowest(low,  lookback)
-fib_range  = swing_high - swing_low
+// Kill switch — 200 SMA bear flip
+if exit_bear_flip and strategy.position_size > 0
+    strategy.close_all(comment="Bear Flip — 200 Broken")
+    partial_taken := false
 
-fib786_level    = swing_high - fib_range * 0.786
-fib618_level    = swing_high - fib_range * 0.618
-fib650_level    = swing_high - fib_range * 0.650
+if exit_short_cover and strategy.position_size < 0
+    strategy.close_all(comment="Short Cover")
 
-plot(fib_786    ? fib786_level : na, "Fib 0.786",         color=color.new(color.orange, 40), style=plot.style_circles, linewidth=1)
-plot(fib_golden ? fib618_level : na, "Fib 0.618 (GP Low)", color=color.new(color.lime, 40),   style=plot.style_circles, linewidth=1)
-plot(fib_golden ? fib650_level : na, "Fib 0.650 (GP High)", color=color.new(color.lime, 40),  style=plot.style_circles, linewidth=1)
+// ─── FIBONACCI LEVELS ────────────────────────────────────────────────────────
+show_fib   = input.bool(true, "Show Fibonacci Levels", group="Fibonacci")
+lookback   = input.int(50,    "Swing Lookback",         group="Fibonacci")
+
+swing_high    = ta.highest(high, lookback)
+swing_low     = ta.lowest(low,  lookback)
+fib_range     = swing_high - swing_low
+fib786_level  = swing_high - fib_range * 0.786
+fib618_level  = swing_high - fib_range * 0.618
+fib650_level  = swing_high - fib_range * 0.650
+
+plot(show_fib ? fib786_level : na, "Fib 0.786",          color=color.new(color.orange, 40), style=plot.style_circles, linewidth=1)
+plot(show_fib ? fib618_level : na, "Fib 0.618 (GP Low)",  color=color.new(color.lime, 40),   style=plot.style_circles, linewidth=1)
+plot(show_fib ? fib650_level : na, "Fib 0.650 (GP High)", color=color.new(color.lime, 40),   style=plot.style_circles, linewidth=1)
 
 // ─── SIGNALS ON CHART ────────────────────────────────────────────────────────
-plotshape(entry_fireworks,  title="Fireworks Buy",  location=location.belowbar, style=shape.triangleup,   color=color.new(color.yellow, 0), size=size.normal, text="🎆")
-plotshape(entry_pullback and not entry_fireworks, title="Pullback Buy", location=location.belowbar, style=shape.triangleup, color=color.new(color.green, 0), size=size.small, text="21")
-plotshape(exit_overbought,  title="Gap+OB Sell",   location=location.abovebar, style=shape.triangledown, color=color.new(color.red, 0),    size=size.small, text="OB")
+plotshape(entry_fireworks or entry_smooth_boost, title="Fireworks/Smooth Buy", location=location.belowbar, style=shape.triangleup,   color=color.new(color.yellow, 0), size=size.normal, text="FIRE")
+plotshape(entry_pullback,   title="Pullback Buy",  location=location.belowbar, style=shape.triangleup,   color=color.new(color.green,  0), size=size.small,  text="21")
+plotshape(entry_short,      title="Short Entry",   location=location.abovebar, style=shape.triangledown, color=color.new(color.red,    0), size=size.small,  text="SHORT")
+plotshape(exit_overbought,  title="Gap+OB Sell",   location=location.abovebar, style=shape.triangledown, color=color.new(color.red,    0), size=size.small,  text="OB")
 plotshape(exit_gap_profit and not exit_overbought, title="Gap Sell", location=location.abovebar, style=shape.triangledown, color=color.new(color.orange, 0), size=size.small, text="GAP")
-plotshape(exit_bear_flip,   title="Bear Flip",     location=location.abovebar, style=shape.xcross,       color=color.new(color.red, 0),    size=size.normal, text="BEAR")
+plotshape(exit_bear_flip,   title="Bear Flip",     location=location.abovebar, style=shape.xcross,       color=color.new(color.red,    0), size=size.normal, text="BEAR")
+plotshape(above_smooth_cross, title="Above Smooth", location=location.belowbar, style=shape.diamond,    color=color.new(color.teal,   0), size=size.tiny,   text="SMT")
+
+// ─── RISK DASHBOARD (TABLE) ──────────────────────────────────────────────────
+var table risk_table = table.new(position.top_right, 2, 7, border_width=1)
+
+if show_risk_table and barstate.islast
+    table.cell(risk_table, 0, 0, "RISK DASHBOARD",    text_color=color.white, bgcolor=color.new(color.blue,  20), text_size=size.small)
+    table.cell(risk_table, 1, 0, "",                                           bgcolor=color.new(color.blue,  20))
+    table.cell(risk_table, 0, 1, "Account",           text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 1, "$" + str.tostring(account_size, "#,###"),   text_color=color.white, bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 2, "Risk/Trade (1%)",   text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 2, "$" + str.tostring(risk_dollars, "#.##"),    text_color=color.yellow, bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 3, "Stop (below 200)",  text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 3, str.tostring(stop_below_200, "#.##"),        text_color=color.red,    bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 4, "TP Target (3:1)",   text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 4, str.tostring(tp_price, "#.##"),              text_color=color.green,  bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 5, "Gap from 21",       text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 5, str.tostring(gap_from_21, "#.##") + "%",     text_color=gap_from_21 >= gap_pct ? color.red : color.green, bgcolor=color.new(color.gray, 70), text_size=size.small)
+    table.cell(risk_table, 0, 6, "Bias",              text_color=color.white, bgcolor=color.new(color.gray,  70), text_size=size.small)
+    table.cell(risk_table, 1, 6, bull_bias ? "BULL" : "BEAR",                 text_color=bull_bias ? color.green : color.red, bgcolor=color.new(color.gray, 70), text_size=size.small)
 
 // ─── ALERTS ──────────────────────────────────────────────────────────────────
-alertcondition(entry_fireworks,  title="Fireworks Entry",  message="🎆 FIREWORKS — Price crossed 200 SMA recently and just touched 21 SMA. Potential big move.")
-alertcondition(entry_pullback,   title="Pullback to 21",   message="21 SMA Touch — Price pulled back to 21 SMA above 200. Potential long entry.")
-alertcondition(exit_gap_profit,  title="Gap Away — Take Profit", message="Price gapped away from 21 SMA. Consider taking profits.")
-alertcondition(exit_bear_flip,   title="Bear Flip — 200 SMA Broken", message="Price crossed below 200 SMA. Macro bias turned bearish.")
+alertcondition(entry_fireworks,      title="Fireworks Entry",         message="FIREWORKS — Crossed 200 recently, now touching 21. Strong long setup.")
+alertcondition(entry_smooth_boost,   title="Smooth Boost Entry",      message="SMOOTH BOOST — Above smooth MA + touching 21. Extended target possible.")
+alertcondition(entry_pullback,       title="Pullback to 21",          message="21 SMA Touch — Pullback to 21 above 200. Standard long entry.")
+alertcondition(entry_short,          title="Short Entry",             message="SHORT SETUP — Touching 21 below 200. Potential short entry.")
+alertcondition(exit_gap_profit,      title="Gap Away — Take Profits", message="Gapped away from 21 SMA. Take partial or full profits.")
+alertcondition(exit_bear_flip,       title="Bear Flip",               message="200 SMA broken. Macro bias flipped bearish. Close longs.")
+alertcondition(above_smooth_cross,   title="Above Smooth MA",         message="Price crossed above Smooth MA. High probability of continuation — consider extended target.")
 
 // ─── TODO (Polish at Home) ────────────────────────────────────────────────────
-// TODO: Add short-side logic (mirror of long — below 200, gap below 21 = cover)
-// TODO: Tune gap_pct per timeframe (4H may need 3–5%, 15m needs 1.5–2%)
-// TODO: Add volume filter — entry candle should have above-avg volume (short squeeze confirmation)
-// TODO: Add inverted H&S pattern detection as bonus entry signal
-// TODO: Add partial take-profit at first gap, trail remainder above 21 SMA
-// TODO: Test on BTC 4H, BTC 15m, and altcoins separately
-// TODO: Consider adding ATR-based gap threshold instead of fixed %
+// TODO: Tune gap_pct per timeframe (4H ~3–5%, 15m ~1.5–2%, 5m ~1%)
+// TODO: Add volume filter — entry candle should exceed avg volume (short squeeze confirmation)
+// TODO: Add inverted H&S detection as bonus entry signal
+// TODO: Add flag pattern detection (consolidation after big move near 21)
+// TODO: Add trailing stop option (Sam admits he should use them more)
+// TODO: Day-of-week filter — flag Thursdays as higher risk, disable on weekends
+// TODO: Test on BTC 4H, BTC 15m, BTC 5m, and altcoins separately
+// TODO: Leverage calculator panel — input leverage X, show liquidation distance
+// TODO: ATR-based stop instead of fixed % below 200 (more adaptive)
+// TODO: "100 for 300" preset mode — auto-size position for $100 risk → $300 target
