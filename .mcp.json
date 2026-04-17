@@ -3,6 +3,10 @@
     "tradingview": {
       "command": "node",
       "args": ["./src/server.js"]
+    },
+    "tool-router": {
+      "command": "npx",
+      "args": ["tool-router-mcp"]
     }
   }
 }
