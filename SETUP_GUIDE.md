@@ -22,22 +22,22 @@ cp ~/tradingview-mcp-jackson/rules.example.json ~/tradingview-mcp-jackson/rules.
 
 Tell the user: "Open `rules.json` and fill in your watchlist (the symbols you trade), your bias criteria (what makes something bullish/bearish for you), and your risk rules. This is what the morning brief uses every day."
 
-## Step 3: Add to MCP Config
+## Step 3: MCP Config (automatic)
 
-Add the server to the user's Claude Code MCP configuration. The config file is at `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
+The repo includes `.mcp.json` at the project root with a relative path. Claude Code picks it up automatically when you open the project directory — no manual config needed.
+
+If you need to add it to a global config instead (`~/.claude/.mcp.json`), use an absolute path:
 
 ```json
 {
   "mcpServers": {
     "tradingview": {
       "command": "node",
-      "args": ["/Users/YOUR_USERNAME/tradingview-mcp-jackson/src/server.js"]
+      "args": ["/path/to/tradingview-mcp-jackson/src/server.js"]
     }
   }
 }
 ```
-
-Replace `YOUR_USERNAME` with the user's actual system username. Run `echo $USER` (Mac/Linux) or `echo %USERNAME%` (Windows) to find it.
 
 If the config file already exists and has other servers, merge the `tradingview` entry into the existing `mcpServers` object. Do not overwrite other servers.
 
