@@ -1,0 +1,136 @@
+// @version=5
+// Crypto Lifer Strategy — Sam Price
+// Based on: 200 SMA macro bias + 21 SMA entry/exit timing
+// "Twisted Sister" setup: 200 SMA cross → pullback to 21 → gap away = take profit
+// Polish notes left as TODO comments
+
+strategy(
+     title       = "Crypto Lifer — 200/21 SMA Strategy",
+     shorttitle  = "CL_200_21",
+     overlay     = true,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 10,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.05,
+     initial_capital   = 10000
+ )
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+ma21_len   = input.int(21,  "21 SMA Length",  group="Moving Averages")
+ma50_len   = input.int(50,  "50 SMA Length",  group="Moving Averages")
+ma80_len   = input.int(80,  "80 SMA Length",  group="Moving Averages")
+ma100_len  = input.int(100, "100 SMA Length", group="Moving Averages")
+ma200_len  = input.int(200, "200 SMA Length", group="Moving Averages")
+
+gap_pct    = input.float(2.5, "Gap Away from 21 SMA % (Take Profit)", minval=0.5, maxval=20, step=0.5, group="Exit")
+stoch_len  = input.int(14,   "Stoch RSI Length",  group="Exit")
+stoch_k    = input.int(3,    "Stoch RSI K",        group="Exit")
+stoch_d    = input.int(3,    "Stoch RSI D",        group="Exit")
+ob_level   = input.int(80,   "Stoch RSI Overbought Level", group="Exit")
+
+fib_786    = input.bool(true, "Show Fib 0.786 Level",        group="Fibonacci")
+fib_golden = input.bool(true, "Show Fib Golden Pocket 0.618–0.65", group="Fibonacci")
+lookback   = input.int(50,   "Swing Lookback for Fib",       group="Fibonacci")
+
+// ─── MOVING AVERAGES ─────────────────────────────────────────────────────────
+ma21  = ta.sma(close, ma21_len)
+ma50  = ta.sma(close, ma50_len)
+ma80  = ta.sma(close, ma80_len)
+ma100 = ta.sma(close, ma100_len)
+ma200 = ta.sma(close, ma200_len)
+
+plot(ma21,  "21 SMA",  color=color.white,  linewidth=2)
+plot(ma50,  "50 SMA",  color=color.red,    linewidth=1)
+plot(ma80,  "80 SMA",  color=color.purple, linewidth=1)
+plot(ma100, "100 SMA", color=color.blue,   linewidth=1)
+plot(ma200, "200 SMA", color=color.yellow, linewidth=2)
+
+// ─── MACRO BIAS ──────────────────────────────────────────────────────────────
+bull_bias = close > ma200   // Above 200 SMA = bullish
+bear_bias = close < ma200   // Below 200 SMA = bearish
+
+bgcolor(bull_bias ? color.new(color.green, 95) : color.new(color.red, 95), title="Bias Background")
+
+// ─── GAP FROM 21 SMA ─────────────────────────────────────────────────────────
+gap_from_21     = math.abs(close - ma21) / ma21 * 100
+gapped_above_21 = close > ma21 and gap_from_21 >= gap_pct
+gapped_below_21 = close < ma21 and gap_from_21 >= gap_pct
+
+// ─── STOCHASTIC RSI ──────────────────────────────────────────────────────────
+rsi_val     = ta.rsi(close, stoch_len)
+stoch_raw   = ta.stoch(rsi_val, rsi_val, rsi_val, stoch_len)
+k           = ta.sma(stoch_raw, stoch_k)
+d           = ta.sma(k, stoch_d)
+overbought  = k >= ob_level and d >= ob_level
+
+// ─── ENTRY CONDITIONS (LONG) ─────────────────────────────────────────────────
+// 1. Price above 200 SMA (macro bullish)
+// 2. Price touches/crosses the 21 SMA from below (pullback entry)
+// 3. "Fireworks": price just crossed back above 200 then touched 21
+touched_21_from_below = ta.crossover(close, ma21)
+above_200_cross        = ta.crossover(close, ma200)
+
+// Standard pullback to 21 entry
+entry_pullback = bull_bias and touched_21_from_below
+
+// "Fireworks" setup: crossed 200 recently (within 10 bars) + touching 21
+bars_since_200_cross = ta.barssince(above_200_cross)
+entry_fireworks      = bull_bias and touched_21_from_below and bars_since_200_cross <= 10
+
+// ─── EXIT CONDITIONS ──────────────────────────────────────────────────────────
+// 1. Gapped far above 21 SMA (extended, take profits)
+// 2. Stoch RSI overbought on current timeframe
+// 3. Fell back below 200 SMA (macro bias flip — kill trade)
+exit_gap_profit  = gapped_above_21
+exit_overbought  = gapped_above_21 and overbought
+exit_bear_flip   = ta.crossunder(close, ma200)
+
+// ─── STRATEGY EXECUTION ──────────────────────────────────────────────────────
+if entry_pullback and strategy.position_size == 0
+    strategy.entry("Long_Pullback", strategy.long, comment="21 Touch")
+
+if entry_fireworks and strategy.position_size == 0
+    strategy.entry("Long_Fireworks", strategy.long, comment="Fireworks")
+
+if exit_overbought
+    strategy.close_all(comment="Gap+OB Exit")
+else if exit_gap_profit
+    strategy.close_all(comment="Gap Exit")
+
+if exit_bear_flip
+    strategy.close_all(comment="Bear Flip")
+
+// ─── FIBONACCI LEVELS (SWING HIGH/LOW) ───────────────────────────────────────
+swing_high = ta.highest(high, lookback)
+swing_low  = ta.lowest(low,  lookback)
+fib_range  = swing_high - swing_low
+
+fib786_level    = swing_high - fib_range * 0.786
+fib618_level    = swing_high - fib_range * 0.618
+fib650_level    = swing_high - fib_range * 0.650
+
+plot(fib_786    ? fib786_level : na, "Fib 0.786",         color=color.new(color.orange, 40), style=plot.style_circles, linewidth=1)
+plot(fib_golden ? fib618_level : na, "Fib 0.618 (GP Low)", color=color.new(color.lime, 40),   style=plot.style_circles, linewidth=1)
+plot(fib_golden ? fib650_level : na, "Fib 0.650 (GP High)", color=color.new(color.lime, 40),  style=plot.style_circles, linewidth=1)
+
+// ─── SIGNALS ON CHART ────────────────────────────────────────────────────────
+plotshape(entry_fireworks,  title="Fireworks Buy",  location=location.belowbar, style=shape.triangleup,   color=color.new(color.yellow, 0), size=size.normal, text="🎆")
+plotshape(entry_pullback and not entry_fireworks, title="Pullback Buy", location=location.belowbar, style=shape.triangleup, color=color.new(color.green, 0), size=size.small, text="21")
+plotshape(exit_overbought,  title="Gap+OB Sell",   location=location.abovebar, style=shape.triangledown, color=color.new(color.red, 0),    size=size.small, text="OB")
+plotshape(exit_gap_profit and not exit_overbought, title="Gap Sell", location=location.abovebar, style=shape.triangledown, color=color.new(color.orange, 0), size=size.small, text="GAP")
+plotshape(exit_bear_flip,   title="Bear Flip",     location=location.abovebar, style=shape.xcross,       color=color.new(color.red, 0),    size=size.normal, text="BEAR")
+
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+alertcondition(entry_fireworks,  title="Fireworks Entry",  message="🎆 FIREWORKS — Price crossed 200 SMA recently and just touched 21 SMA. Potential big move.")
+alertcondition(entry_pullback,   title="Pullback to 21",   message="21 SMA Touch — Price pulled back to 21 SMA above 200. Potential long entry.")
+alertcondition(exit_gap_profit,  title="Gap Away — Take Profit", message="Price gapped away from 21 SMA. Consider taking profits.")
+alertcondition(exit_bear_flip,   title="Bear Flip — 200 SMA Broken", message="Price crossed below 200 SMA. Macro bias turned bearish.")
+
+// ─── TODO (Polish at Home) ────────────────────────────────────────────────────
+// TODO: Add short-side logic (mirror of long — below 200, gap below 21 = cover)
+// TODO: Tune gap_pct per timeframe (4H may need 3–5%, 15m needs 1.5–2%)
+// TODO: Add volume filter — entry candle should have above-avg volume (short squeeze confirmation)
+// TODO: Add inverted H&S pattern detection as bonus entry signal
+// TODO: Add partial take-profit at first gap, trail remainder above 21 SMA
+// TODO: Test on BTC 4H, BTC 15m, and altcoins separately
+// TODO: Consider adding ATR-based gap threshold instead of fixed %
