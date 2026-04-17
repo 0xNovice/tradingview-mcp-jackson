@@ -1,0 +1,448 @@
+//@version=6
+strategy("200 MA + NPoc Smart TP — v2",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     slippage=2,
+     max_bars_back=5000,
+     max_lines_count=100,
+     max_labels_count=300)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_ind = "Indicators"
+ma_len   = input.int(200,  "MA Length",    group=grp_ind)
+rsi_len  = input.int(14,   "RSI Length",   group=grp_ind)
+atr_len  = input.int(14,   "ATR Length",   group=grp_ind)
+
+grp_fp = "Footprint Proxy"
+delta_min = input.float(0.55,"Min Delta Ratio",      group=grp_fp, minval=0.3, step=0.05)
+vol_node  = input.int(20,    "Volume Node Lookback", group=grp_fp, minval=5)
+
+grp_f = "Filters"
+adx_min  = input.int(20, "Min ADX", group=grp_f)
+
+grp_r = "Risk"
+rr_floor = input.float(2.0, "Min R:R Floor", group=grp_r, minval=1.0, step=0.1,
+           tooltip="Minimum R:R accepted. NPoc/VAH/H4 targets only used if they exceed this floor.")
+
+grp_vp = "Volume Profile (NPoc)"
+vp_bkt   = input.float(100.0, "Bucket Size ($)",  group=grp_vp, minval=1.0, step=10.0)
+vp_va    = input.float(70.0,  "Value Area %",     group=grp_vp, minval=50.0, maxval=95.0, step=5.0)
+vp_daily = input.bool(true,   "Use Daily NPoc",   group=grp_vp)
+vp_asian = input.bool(true,   "Use Asian NPoc",   group=grp_vp)
+vp_ny    = input.bool(true,   "Use NY NPoc",      group=grp_vp)
+
+grp_c = "Confluence (Pullback System)"
+use_7m_ma21  = input.bool(true,  "7min 21 MA riding",          group=grp_c,
+               tooltip="Long only when price > 7min 21 SMA, short only when price < 7min 21 SMA. Confirms micro-trend direction.")
+use_gp       = input.bool(true,  "Fib Golden Pocket (0.618–0.786)", group=grp_c,
+               tooltip="Only enter when price retraces into the 0.618–0.786 Fibonacci zone of the most recent impulse swing.")
+gp_swing_lb  = input.int(30,     "GP Swing Lookback (bars)",   group=grp_c, minval=10, maxval=200,
+               tooltip="How many bars back to detect the impulse swing high/low for Fibonacci retracement.")
+use_htf_rsi  = input.bool(true,  "15min RSI filter (no bear div)", group=grp_c,
+               tooltip="Require 15min RSI ≥ 50 for longs (trend intact, no bear divergence proxy). ≤ 50 for shorts.")
+use_hs_warn  = input.bool(true,  "H&S warning background",     group=grp_c,
+               tooltip="Highlight bars where a potential head-and-shoulders right shoulder is forming (lower high + RSI lower high on 1min).")
+
+grp_bt = "Backtest Range"
+bt_filter = input.bool(true,                             "Enable Date Filter",  group=grp_bt)
+bt_from   = input.time(timestamp("2026-04-09 00:00 +0000"), "From (UTC)",       group=grp_bt)
+bt_to     = input.time(timestamp("2026-04-16 23:59 +0000"), "To   (UTC)",       group=grp_bt)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+ma15    = ta.sma(close, ma_len)
+ma50    = ta.sma(close, 50)
+rsi15   = ta.rsi(close, rsi_len)
+atr14   = ta.atr(atr_len)
+vol_avg = ta.sma(volume, vol_node)
+[di_plus, di_minus, adx] = ta.dmi(14, 14)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FOOTPRINT PROXY
+// ═══════════════════════════════════════════════════════════════════════════════
+bar_range   = high - low
+delta_ratio = bar_range > 0 ? (close - low) / bar_range : 0.5
+delta_3bar  = (delta_ratio + delta_ratio[1] + delta_ratio[2]) / 3
+vol_ok_fp   = volume >= vol_avg * 1.1
+fp_long     = delta_ratio     >= delta_min and delta_3bar >= 0.52 and vol_ok_fp
+fp_short    = (1-delta_ratio) >= delta_min and delta_3bar <= 0.48 and vol_ok_fp
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MULTI-TF TREND FILTER
+// ═══════════════════════════════════════════════════════════════════════════════
+h1_close = request.security(syminfo.tickerid, "60",  close,             lookahead=barmerge.lookahead_off)
+h1_ma200 = request.security(syminfo.tickerid, "60",  ta.sma(close,200), lookahead=barmerge.lookahead_off)
+h4_close = request.security(syminfo.tickerid, "240", close,             lookahead=barmerge.lookahead_off)
+h4_ma200 = request.security(syminfo.tickerid, "240", ta.sma(close,200), lookahead=barmerge.lookahead_off)
+d1_close = request.security(syminfo.tickerid, "D",   close,             lookahead=barmerge.lookahead_off)
+d1_ma200 = request.security(syminfo.tickerid, "D",   ta.sma(close,200), lookahead=barmerge.lookahead_off)
+
+bull_htf = h1_close > h1_ma200 and h4_close > h4_ma200
+bear_htf = h1_close < h1_ma200 and h4_close < h4_ma200
+d1_bull  = d1_close > d1_ma200
+d1_bear  = d1_close < d1_ma200
+
+ma15_rising  = ma15 > ma15[20]
+ma15_falling = ma15 < ma15[20]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFLUENCE — PULLBACK SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// 1. 7min 21 MA  — micro-trend direction
+m7_ma21 = request.security(syminfo.tickerid, "7", ta.sma(close, 21), lookahead=barmerge.lookahead_off)
+c7_close = request.security(syminfo.tickerid, "7", close,            lookahead=barmerge.lookahead_off)
+ma21_long_ok  = not use_7m_ma21 or c7_close > m7_ma21
+ma21_short_ok = not use_7m_ma21 or c7_close < m7_ma21
+
+// 2. Fib Golden Pocket  — 0.618–0.786 retracement zone
+//    For longs: swing low → swing high impulse, price pulls back into GP
+//    For shorts: swing high → swing low impulse, price bounces into GP
+float swing_hi_gp = ta.highest(high, gp_swing_lb)
+float swing_lo_gp = ta.lowest(low,   gp_swing_lb)
+float gp_range    = swing_hi_gp - swing_lo_gp
+
+// Long GP: price in the 0.618–0.786 retracement from high (i.e., 21.4%–38.2% from high)
+float gp_lo_long  = swing_hi_gp - gp_range * 0.786
+float gp_hi_long  = swing_hi_gp - gp_range * 0.618
+in_gp_long  = close >= gp_lo_long and close <= gp_hi_long
+
+// Short GP: price in the 0.618–0.786 bounce from low
+float gp_hi_short = swing_lo_gp + gp_range * 0.786
+float gp_lo_short = swing_lo_gp + gp_range * 0.618
+in_gp_short = close >= gp_lo_short and close <= gp_hi_short
+
+gp_long_ok  = not use_gp or in_gp_long
+gp_short_ok = not use_gp or in_gp_short
+
+// 3. 15min RSI  — no bear divergence proxy (RSI ≥ 50 = trend intact)
+rsi_15m      = request.security(syminfo.tickerid, "15", ta.rsi(close, 14), lookahead=barmerge.lookahead_off)
+htf_rsi_long_ok  = not use_htf_rsi or rsi_15m >= 50
+htf_rsi_short_ok = not use_htf_rsi or rsi_15m <= 50
+
+// 4. H&S warning detection  — lower high forming + RSI lower high (1min proxy)
+//    Right shoulder = current high < previous swing high AND rsi < rsi at prior high
+var float hs_prev_high     = na
+var float hs_prev_rsi_high = na
+// Track swing highs on current TF
+if high == ta.highest(high, 5) and high[1] < high and high[1] < high[2]
+    hs_prev_high     := high[1]
+    hs_prev_rsi_high := rsi15[1]
+
+hs_right_shoulder = use_hs_warn and not na(hs_prev_high) and
+                    high < hs_prev_high and rsi15 < hs_prev_rsi_high and
+                    strategy.position_size >= 0   // only warn on potential longs/flat
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SESSION VOLUME PROFILE  —  NPoc + VAH/VAL
+//   Three session types: Daily (D), Asian (A 00:00–08:00 UTC), NY (N 13:30–22:00)
+//   Each bar's volume is distributed across the price range it covers.
+//   On session close → POC + 70% Value Area stored as naked levels.
+//   Levels marked as "filled" once price crosses through them.
+//   Strategy uses the nearest unfilled level above/below as the smart TP target.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Session detection (UTC)
+int  t_hm     = hour(time, "UTC") * 100 + minute(time, "UTC")
+bool in_asian = t_hm >= 0    and t_hm < 800
+bool in_ny    = t_hm >= 1330 and t_hm < 2200
+
+bool new_day    = ta.change(time("D")) != 0
+bool asian_open = in_asian and not in_asian[1]
+bool asian_clos = not in_asian and in_asian[1]
+bool ny_open    = in_ny    and not in_ny[1]
+bool ny_clos    = not in_ny    and in_ny[1]
+
+// Live accumulators
+var map<int,float> d_m = map.new<int,float>()
+var map<int,float> a_m = map.new<int,float>()
+var map<int,float> n_m = map.new<int,float>()
+var int d_bar0 = na
+var int a_bar0 = na
+var int n_bar0 = na
+
+// Completed level storage (capped at 20 most recent)
+var float[] npoc_p   = array.new_float()
+var bool[]  npoc_hit = array.new_bool()
+var float[] va_hi    = array.new_float()
+var float[] va_lo    = array.new_float()
+
+// ── Volume Profile Helpers ──────────────────────────────────────────────────
+
+vpAddBar(map<int,float> m, float b_lo, float b_hi, float b_vol) =>
+    int lo_b = math.floor(b_lo / vp_bkt)
+    int hi_b = math.floor(b_hi / vp_bkt)
+    int cnt  = math.max(1, hi_b - lo_b + 1)
+    float vpb = b_vol / cnt
+    for i = lo_b to hi_b
+        float cur = na(map.get(m, i)) ? 0.0 : map.get(m, i)
+        map.put(m, i, cur + vpb)
+
+vpCalcPOC(map<int,float> m) =>
+    float mx = 0.0
+    int   pb = na
+    for [k, v] in m
+        if v > mx
+            mx := v
+            pb := k
+    na(pb) ? na : (pb + 0.5) * vp_bkt
+
+vpCalcVA(map<int,float> m, float poc_p) =>
+    float vh = na
+    float vl = na
+    if not na(poc_p)
+        int   poc_b = math.floor(poc_p / vp_bkt)
+        float total = 0.0
+        for [k, v] in m
+            total += v
+        float target = total * (vp_va / 100.0)
+        float accum  = na(map.get(m, poc_b)) ? 0.0 : map.get(m, poc_b)
+        int   lo_b   = poc_b
+        int   hi_b   = poc_b
+        int   guard  = 0
+        while accum < target and guard < 500
+            float up = na(map.get(m, hi_b+1)) ? 0.0 : map.get(m, hi_b+1)
+            float dn = na(map.get(m, lo_b-1)) ? 0.0 : map.get(m, lo_b-1)
+            if up == 0.0 and dn == 0.0
+                break
+            if up >= dn
+                hi_b  += 1
+                accum += up
+            else
+                lo_b  -= 1
+                accum += dn
+            guard += 1
+        vh := (hi_b + 1) * vp_bkt
+        vl :=  lo_b      * vp_bkt
+    [vh, vl]
+
+vpCommit(map<int,float> m) =>
+    float poc = vpCalcPOC(m)
+    if not na(poc)
+        [vh, vl] = vpCalcVA(m, poc)
+        array.push(npoc_p,   poc)
+        array.push(npoc_hit, false)
+        array.push(va_hi,    na(vh) ? poc : vh)
+        array.push(va_lo,    na(vl) ? poc : vl)
+        while array.size(npoc_p) > 20
+            array.shift(npoc_p)
+            array.shift(npoc_hit)
+            array.shift(va_hi)
+            array.shift(va_lo)
+
+// ── Accumulate Profiles Each Bar ───────────────────────────────────────────
+
+// Daily
+if new_day
+    if vp_daily and not na(d_bar0) and map.size(d_m) > 0
+        vpCommit(d_m)
+    d_m    := map.new<int,float>()
+    d_bar0 := bar_index
+vpAddBar(d_m, low, high, volume)
+
+// Asian
+if asian_open
+    a_m    := map.new<int,float>()
+    a_bar0 := bar_index
+if in_asian
+    vpAddBar(a_m, low, high, volume)
+if asian_clos and vp_asian and not na(a_bar0) and map.size(a_m) > 0
+    vpCommit(a_m)
+
+// NY
+if ny_open
+    n_m    := map.new<int,float>()
+    n_bar0 := bar_index
+if in_ny
+    vpAddBar(n_m, low, high, volume)
+if ny_clos and vp_ny and not na(n_bar0) and map.size(n_m) > 0
+    vpCommit(n_m)
+
+// ── Fill Detection ──────────────────────────────────────────────────────────
+int np_sz = array.size(npoc_p)
+if np_sz > 0
+    for i = 0 to np_sz - 1
+        if not array.get(npoc_hit, i) and low <= array.get(npoc_p, i) and high >= array.get(npoc_p, i)
+            array.set(npoc_hit, i, true)
+
+// ── Find Nearest Naked Levels Above / Below Current Price ──────────────────
+float npoc_above = na
+float npoc_below = na
+float vah_above  = na
+float val_below  = na
+
+if np_sz > 0
+    for i = 0 to np_sz - 1
+        if not array.get(npoc_hit, i)
+            float p  = array.get(npoc_p,  i)
+            float vh = array.get(va_hi,   i)
+            float vl = array.get(va_lo,   i)
+            if p > close
+                npoc_above := na(npoc_above) ? p  : math.min(npoc_above, p)
+                vah_above  := na(vah_above)  ? vh : math.min(vah_above,  vh)
+            else if p < close
+                npoc_below := na(npoc_below) ? p  : math.max(npoc_below, p)
+                val_below  := na(val_below)  ? vl : math.max(val_below,  vl)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMART TP
+//   Finds the NEAREST valid target that exceeds the rr_floor minimum.
+//   Candidates (in evaluation order, nearest wins): NPoc → VAH/VAL → H4 200 MA
+//   The 2:1 floor is always enforced — no trade exits below minimum R:R.
+// ═══════════════════════════════════════════════════════════════════════════════
+smartTP(float entry, float sl, bool is_long) =>
+    float risk   = math.abs(entry - sl)
+    float min_tp = is_long ? entry + risk * rr_floor : entry - risk * rr_floor
+    float best   = min_tp
+    string src   = "2:1"
+
+    if is_long
+        // Evaluate each candidate — take the nearest one at or beyond min_tp
+        float cand_poc = not na(npoc_above) and npoc_above >= min_tp ? npoc_above : na
+        float cand_vah = not na(vah_above)  and vah_above  >= min_tp ? vah_above  : na
+        float cand_h4  = not na(h4_ma200)   and h4_ma200   >= min_tp ? h4_ma200   : na
+
+        // Find nearest (lowest value above min_tp)
+        float nearest = na
+        if not na(cand_poc)
+            nearest := na(nearest) ? cand_poc : math.min(nearest, cand_poc)
+        if not na(cand_vah)
+            nearest := na(nearest) ? cand_vah : math.min(nearest, cand_vah)
+        if not na(cand_h4)
+            nearest := na(nearest) ? cand_h4  : math.min(nearest, cand_h4)
+
+        if not na(nearest)
+            best := nearest
+            // Label which target was nearest
+            src  := nearest == cand_poc ? "NPoc" : nearest == cand_vah ? "VAH" : "H4MA"
+
+    else
+        float cand_poc = not na(npoc_below) and npoc_below <= min_tp ? npoc_below : na
+        float cand_val = not na(val_below)  and val_below  <= min_tp ? val_below  : na
+        float cand_h4  = not na(h4_ma200)   and h4_ma200   <= min_tp ? h4_ma200   : na
+
+        float nearest = na
+        if not na(cand_poc)
+            nearest := na(nearest) ? cand_poc : math.max(nearest, cand_poc)
+        if not na(cand_val)
+            nearest := na(nearest) ? cand_val : math.max(nearest, cand_val)
+        if not na(cand_h4)
+            nearest := na(nearest) ? cand_h4  : math.max(nearest, cand_h4)
+
+        if not na(nearest)
+            best := nearest
+            src  := nearest == cand_poc ? "NPoc" : nearest == cand_val ? "VAL" : "H4MA"
+
+    // Hard enforce the R:R floor
+    best := is_long ? math.max(best, min_tp) : math.min(best, min_tp)
+    [best, src]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE TYPE CLASSIFICATION
+//   Swing  — Daily 200 MA also aligned (all 3 TFs agree)
+//   Scalp  — Price is tight / first bar of session
+//   Day    — Standard setup (default)
+// ═══════════════════════════════════════════════════════════════════════════════
+tradeType(bool is_long) =>
+    bool d_aligned = is_long ? d1_bull : d1_bear
+    bool tight_bar = atr14 < ta.sma(atr14, 20) * 0.8
+    bool sess_open = (in_ny and not in_ny[4]) or (in_asian and not in_asian[4])
+    d_aligned ? "Swing" : (tight_bar or sess_open) ? "Scalp" : "Day"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+low_touched_ma  = low  <= ma15 * 1.002 and close > ma15
+high_touched_ma = high >= ma15 * 0.998 and close < ma15
+near_ma         = math.abs(close[1] - ma15[1]) < atr14 * 3.0
+rsi_long_ok     = rsi15 >= 48 and rsi15 <= 70
+rsi_short_ok    = rsi15 >= 30 and rsi15 <= 52
+trend_ok        = adx > adx_min
+di_long_ok      = di_plus > di_minus
+di_short_ok     = di_minus > di_plus
+no_trade        = strategy.opentrades == 0
+
+in_range    = not bt_filter or (time >= bt_from and time <= bt_to)
+long_entry  = bull_htf and ma15_rising  and low_touched_ma  and fp_long  and near_ma and rsi_long_ok  and trend_ok and di_long_ok  and no_trade and in_range and ma21_long_ok  and gp_long_ok  and htf_rsi_long_ok
+short_entry = bear_htf and ma15_falling and high_touched_ma and fp_short and near_ma and rsi_short_ok and trend_ok and di_short_ok and no_trade and in_range and ma21_short_ok and gp_short_ok and htf_rsi_short_ok
+
+// ── Pre-compute every bar (Pine v6 consistency requirement) ──────────────────
+//    All function calls and SL/TP calculations must run unconditionally so Pine
+//    can track their series history correctly.
+sl_long  = math.min(low, ma15) - atr14 * 0.3
+sl_short = math.max(high, ma15) + atr14 * 0.3
+[tp_long,  tp_src_long]  = smartTP(close, sl_long,  true)
+[tp_short, tp_src_short] = smartTP(close, sl_short, false)
+t_type_long  = tradeType(true)
+t_type_short = tradeType(false)
+rr_long  = math.round((tp_long  - close) / (close - sl_long)  * 10) / 10
+rr_short = math.round((close - tp_short) / (sl_short - close) * 10) / 10
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE EXECUTION
+// ═══════════════════════════════════════════════════════════════════════════════
+if long_entry
+    strategy.entry("Long", strategy.long, comment=t_type_long)
+    strategy.exit("Long Exit", "Long", stop=sl_long, limit=tp_long, comment="TP:" + tp_src_long)
+    label.new(bar_index, low - atr14,
+              t_type_long + "  δ+" + str.tostring(math.round(delta_ratio * 100)) + "%\n" +
+              "TP: " + tp_src_long + " @ " + str.tostring(math.round(tp_long)) + "  (" + str.tostring(rr_long) + "R)\n" +
+              "SL: " + str.tostring(math.round(sl_long)) +
+              "  Vol: " + str.tostring(math.round(volume / vol_avg * 10) / 10) + "x",
+              style=label.style_label_up,
+              color=color.new(color.lime, 15),
+              textcolor=color.black, size=size.small)
+
+if short_entry
+    strategy.entry("Short", strategy.short, comment=t_type_short)
+    strategy.exit("Short Exit", "Short", stop=sl_short, limit=tp_short, comment="TP:" + tp_src_short)
+    label.new(bar_index, high + atr14,
+              t_type_short + "  δ-" + str.tostring(math.round((1 - delta_ratio) * 100)) + "%\n" +
+              "TP: " + tp_src_short + " @ " + str.tostring(math.round(tp_short)) + "  (" + str.tostring(rr_short) + "R)\n" +
+              "SL: " + str.tostring(math.round(sl_short)) +
+              "  Vol: " + str.tostring(math.round(volume / vol_avg * 10) / 10) + "x",
+              style=label.style_label_down,
+              color=color.new(color.red, 15),
+              textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ═══════════════════════════════════════════════════════════════════════════════
+plot(ma15,    "200 SMA (15M)", color=color.yellow, linewidth=2)
+plot(ma50,    "50 SMA (15M)",  color=color.orange, linewidth=1)
+plot(h1_ma200,"200 SMA (1H)", color=color.blue,   linewidth=1)
+plot(h4_ma200,"200 SMA (4H)", color=color.purple, linewidth=1)
+
+// Reference: nearest NPoc and VA levels (dotted circles — subtle)
+plot(npoc_above, "NPoc Above", color=color.new(color.orange, 40), linewidth=1, style=plot.style_circles)
+plot(npoc_below, "NPoc Below", color=color.new(color.orange, 40), linewidth=1, style=plot.style_circles)
+plot(vah_above,  "VAH Above",  color=color.new(color.teal,   50), linewidth=1, style=plot.style_circles)
+plot(val_below,  "VAL Below",  color=color.new(color.purple, 50), linewidth=1, style=plot.style_circles)
+
+// Footprint delta bar coloring
+barcolor(delta_ratio >= 0.65 ? color.new(color.lime, 40) :
+         delta_ratio <= 0.35 ? color.new(color.red,  40) : na,
+         title="Footprint Delta Bars")
+
+// HTF trend background
+bgcolor(bull_htf and trend_ok ? color.new(color.green, 95) :
+        bear_htf and trend_ok ? color.new(color.red,   95) : na,
+        title="HTF Bias Background")
+
+// H&S right shoulder warning (orange background)
+bgcolor(hs_right_shoulder ? color.new(color.orange, 80) : na, title="H&S Right Shoulder Warning")
+
+// Fib GP zone highlight (subtle blue when price is in the GP zone)
+bgcolor(in_gp_long  and bull_htf ? color.new(color.blue, 90) : na, title="GP Long Zone")
+bgcolor(in_gp_short and bear_htf ? color.new(color.purple, 90) : na, title="GP Short Zone")
+
+// Entry arrows
+plotshape(long_entry,  "Long",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.normal)
+plotshape(short_entry, "Short", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.normal)

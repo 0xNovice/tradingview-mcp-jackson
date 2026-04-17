@@ -1,0 +1,269 @@
+//@version=6
+strategy("ORB — NY 9:30 Open Range Breakout",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     slippage=1,
+     max_bars_back=500,
+     max_lines_count=200,
+     max_boxes_count=50,
+     max_labels_count=200)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_orb = "ORB"
+rr       = input.float(2.0,  "R:R for TP1 (75% close)", group=grp_orb, minval=1.0, step=0.1)
+tp1_pct  = input.float(75.0, "% closed at TP1",          group=grp_orb, minval=10.0, maxval=95.0, step=5.0)
+twz_tf   = input.string("15","Runner exit HTF (tweezer)", group=grp_orb, options=["5","15","30","60"])
+twz_tol  = input.float(0.20, "Tweezer tolerance %",       group=grp_orb, minval=0.01, maxval=2.0, step=0.05,
+            tooltip="Max % difference between the two candle highs/lows to qualify as a tweezer")
+
+grp_tf   = "Trend Filter  (ORB only in trending markets)"
+tf_on    = input.bool(true,   "Enable Trend Filter",       group=grp_tf,
+           tooltip="Disables ORB entries when ADX is below the threshold — ORB works best when the market has a trending open with directional momentum.")
+tf_res   = input.string("60", "ADX Timeframe",             group=grp_tf, options=["15","60","240"],
+           tooltip="Higher TF to measure trend strength. 1H is recommended for a 1–5m ORB strategy.")
+tf_adx   = input.int(25,      "Min ADX (choppy = skip)",   group=grp_tf, minval=10, maxval=60, step=1,
+           tooltip="ADX below this value = choppy/ranging market → no ORB entries. ADX at or above = trending → ORB is valid.")
+tf_orb   = input.float(2.5,   "Max ORB range (× ATR)",     group=grp_tf, minval=0.5, step=0.1,
+           tooltip="If the ORB range (H-L) is wider than N × ATR the open was too volatile. Skip entries that day.")
+
+grp_bt   = "Backtest Range"
+bt_on    = input.bool(true,  "Enable Date Filter", group=grp_bt)
+bt_from  = input.time(timestamp("2026-04-09 00:00 +0000"), "From (UTC)", group=grp_bt)
+bt_to    = input.time(timestamp("2026-04-16 23:59 +0000"), "To   (UTC)", group=grp_bt)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME  (all in America/New_York)
+// ═══════════════════════════════════════════════════════════════════════════════
+ny_h  = hour(time,   "America/New_York")
+ny_m  = minute(time, "America/New_York")
+ny_hm = ny_h * 100 + ny_m
+
+in_orb_period = ny_hm >= 930  and ny_hm < 945     // 9:30–9:44 — build the ORB
+in_trade_win  = ny_hm >= 945  and ny_hm < 1555     // 9:45–3:55 — trade window
+eod_close_now = ny_hm >= 1555 and ny_hm < 1600     // 3:55 PM — force close all
+
+// Rising edge of the ORB period (fires on the first bar each morning)
+orb_window_start = in_orb_period and not in_orb_period[1]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORB HIGH / LOW  — accumulated during the 9:30–9:44 window
+// ═══════════════════════════════════════════════════════════════════════════════
+var float orb_hi  = na
+var float orb_lo  = na
+var bool  orb_rdy = false   // flips true when 9:45 bar starts and ORB is valid
+
+// Reset at the start of each new ORB period
+if orb_window_start
+    orb_hi  := na
+    orb_lo  := na
+    orb_rdy := false
+
+// Expand H/L each bar inside the ORB window
+if in_orb_period
+    orb_hi := na(orb_hi) ? high : math.max(orb_hi, high)
+    orb_lo := na(orb_lo) ? low  : math.min(orb_lo, low)
+
+// Lock the ORB once we enter the trade window
+if in_trade_win and not in_trade_win[1] and not na(orb_hi)
+    orb_rdy := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORB VISUALS  — green dashed line at H, red at L, yellow box for the range
+//   Lines/boxes are re-created each day.
+// ═══════════════════════════════════════════════════════════════════════════════
+var line  l_hi   = na
+var line  l_lo   = na
+var box   b_orb  = na
+var label lbl_hi = na
+var label lbl_lo = na
+
+if orb_rdy and not orb_rdy[1]
+    line.delete(l_hi)
+    line.delete(l_lo)
+    box.delete(b_orb)
+    label.delete(lbl_hi)
+    label.delete(lbl_lo)
+
+    // Extend lines 500 bars — covers a full session even on 1m
+    l_hi  := line.new(bar_index, orb_hi, bar_index + 500, orb_hi,
+                      color=color.new(color.lime, 0), style=line.style_dashed, width=2)
+    l_lo  := line.new(bar_index, orb_lo, bar_index + 500, orb_lo,
+                      color=color.new(color.red,  0), style=line.style_dashed, width=2)
+
+    // Shaded ORB zone box (spans the 9:30–9:44 window, drawn backwards ~15 bars)
+    int look_back = math.max(1, int(900 / timeframe.multiplier))  // ~15 min in bars
+    b_orb := box.new(bar_index - look_back, orb_hi, bar_index, orb_lo,
+                     border_color=color.new(color.gray, 70),
+                     bgcolor=color.new(color.yellow, 88))
+
+    // Labels on the lines
+    lbl_hi := label.new(bar_index, orb_hi, "ORB H " + str.tostring(math.round(orb_hi)),
+                        style=label.style_label_right, color=color.new(color.lime, 20),
+                        textcolor=color.black, size=size.small)
+    lbl_lo := label.new(bar_index, orb_lo, "ORB L " + str.tostring(math.round(orb_lo)),
+                        style=label.style_label_right, color=color.new(color.red, 20),
+                        textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TREND FILTER  —  skip ORB on trending days
+//   Uses ADX from a higher timeframe (default 1H).
+//   Also rejects days where the ORB range itself is abnormally wide (volatile open).
+//   Both conditions must be met for entries to be allowed.
+// ═══════════════════════════════════════════════════════════════════════════════
+[_, _, htf_adx_val] = request.security(syminfo.tickerid, tf_res, ta.dmi(14, 14), lookahead=barmerge.lookahead_off)
+atr_daily           = request.security(syminfo.tickerid, "D",    ta.atr(14),      lookahead=barmerge.lookahead_off)
+
+// Market is ranging when: ADX below threshold AND ORB range is not too wide
+orb_range     = na(orb_hi) or na(orb_lo) ? 0.0 : orb_hi - orb_lo
+orb_range_ok  = not orb_rdy or (orb_range <= atr_daily * tf_orb)
+adx_ok        = not orb_rdy or (htf_adx_val >= tf_adx)
+market_ranging = not tf_on or (adx_ok and orb_range_ok)
+
+// Visual: dim the ORB lines gray when trend filter blocks entries today
+if orb_rdy and not market_ranging
+    line.set_color(l_hi, color.new(color.gray, 40))
+    line.set_color(l_lo, color.new(color.gray, 40))
+    line.set_style(l_hi, line.style_dotted)
+    line.set_style(l_lo, line.style_dotted)
+    label.set_text(lbl_hi, "ORB H — TRENDING (skip)")
+    label.set_text(lbl_lo, "ORB L — TRENDING (skip)")
+    label.set_color(lbl_hi, color.new(color.gray, 40))
+    label.set_color(lbl_lo, color.new(color.gray, 40))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HTF TWEEZER  —  runner exit signal on higher timeframe
+//   Tweezer Top : two consecutive HTF bars with nearly equal highs,
+//                 second bar closes bearish  →  exit long runner
+//   Tweezer Bot : two consecutive HTF bars with nearly equal lows,
+//                 second bar closes bullish  →  exit short runner
+// ═══════════════════════════════════════════════════════════════════════════════
+htf_h  = request.security(syminfo.tickerid, twz_tf, high,   lookahead=barmerge.lookahead_off)
+htf_h1 = request.security(syminfo.tickerid, twz_tf, high[1],lookahead=barmerge.lookahead_off)
+htf_l  = request.security(syminfo.tickerid, twz_tf, low,    lookahead=barmerge.lookahead_off)
+htf_l1 = request.security(syminfo.tickerid, twz_tf, low[1], lookahead=barmerge.lookahead_off)
+htf_o  = request.security(syminfo.tickerid, twz_tf, open,   lookahead=barmerge.lookahead_off)
+htf_c  = request.security(syminfo.tickerid, twz_tf, close,  lookahead=barmerge.lookahead_off)
+
+tweezer_top = math.abs(htf_h - htf_h1) / ((htf_h + htf_h1) / 2) * 100 <= twz_tol and htf_c < htf_o
+tweezer_bot = math.abs(htf_l - htf_l1) / ((htf_l + htf_l1) / 2) * 100 <= twz_tol and htf_c > htf_o
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITIONS
+//   Candle close confirmation: first bar whose close crosses the ORB level
+// ═══════════════════════════════════════════════════════════════════════════════
+in_range     = not bt_on or (time >= bt_from and time <= bt_to)
+no_pos       = strategy.opentrades == 0
+
+long_signal  = orb_rdy and in_trade_win and in_range and no_pos and market_ranging and
+               close > orb_hi and close[1] <= orb_hi
+
+short_signal = orb_rdy and in_trade_win and in_range and no_pos and market_ranging and
+               close < orb_lo and close[1] >= orb_lo
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POSITION STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+var float entry_px    = na
+var float tp1_price   = na
+var float init_sl     = na
+var float be_price    = na     // break-even stop level
+var bool  be_active   = false  // true once TP1 has fired
+var int   closed_at_entry = 0  // closed-trade count when we entered
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXECUTE ENTRIES
+// ═══════════════════════════════════════════════════════════════════════════════
+atr14 = ta.atr(14)   // pre-compute every bar (Pine v6 consistency requirement)
+
+if long_signal
+    float risk = close - orb_lo
+    entry_px          := close
+    init_sl           := orb_lo
+    tp1_price         := close + risk * rr
+    be_price          := close
+    be_active         := false
+    closed_at_entry   := strategy.closedtrades
+
+    strategy.entry("Long", strategy.long)
+    // 75% exits at 2:1 TP
+    strategy.exit("Long TP1",    "Long", qty_percent=tp1_pct, limit=tp1_price, comment="TP1 " + str.tostring(rr) + "R")
+    // Runner: initial SL at ORB low
+    strategy.exit("Long Runner", "Long", stop=init_sl, comment="Runner SL")
+
+    // Entry label
+    label.new(bar_index, low - atr14,
+              "LONG BO\nEntry: " + str.tostring(math.round(close)) +
+              "\nSL: "    + str.tostring(math.round(orb_lo)) +
+              "\nTP1: "   + str.tostring(math.round(tp1_price)) + " (" + str.tostring(rr) + "R)",
+              style=label.style_label_up, color=color.new(color.lime, 15),
+              textcolor=color.black, size=size.small)
+
+if short_signal
+    float risk = orb_hi - close
+    entry_px          := close
+    init_sl           := orb_hi
+    tp1_price         := close - risk * rr
+    be_price          := close
+    be_active         := false
+    closed_at_entry   := strategy.closedtrades
+
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP1",    "Short", qty_percent=tp1_pct, limit=tp1_price, comment="TP1 " + str.tostring(rr) + "R")
+    strategy.exit("Short Runner", "Short", stop=init_sl, comment="Runner SL")
+
+    label.new(bar_index, high + atr14,
+              "SHORT BO\nEntry: " + str.tostring(math.round(close)) +
+              "\nSL: "    + str.tostring(math.round(orb_hi)) +
+              "\nTP1: "   + str.tostring(math.round(tp1_price)) + " (" + str.tostring(rr) + "R)",
+              style=label.style_label_down, color=color.new(color.red, 15),
+              textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RUNNER MANAGEMENT
+//   Once TP1 fires (closedtrades increases from when we entered):
+//     → Move SL to break-even
+//     → Exit remaining 25% on tweezer signal
+// ═══════════════════════════════════════════════════════════════════════════════
+if strategy.opentrades > 0 and not be_active and strategy.closedtrades > closed_at_entry
+    be_active := true
+    be_price  := entry_px   // BE = entry price
+
+// Update the runner's stop to break-even once TP1 has fired
+if be_active and strategy.opentrades > 0
+    if strategy.position_size > 0
+        strategy.exit("Long Runner", "Long", stop=be_price, comment="BE Stop")
+    else if strategy.position_size < 0
+        strategy.exit("Short Runner", "Short", stop=be_price, comment="BE Stop")
+
+// Exit runner on tweezer pattern (only valid after BE is active)
+if be_active and strategy.opentrades > 0
+    if strategy.position_size > 0 and tweezer_top
+        strategy.close("Long", comment="Tweezer Top")
+    else if strategy.position_size < 0 and tweezer_bot
+        strategy.close("Short", comment="Tweezer Bot")
+
+// Force close everything at end of NY session
+if eod_close_now and strategy.opentrades > 0
+    strategy.close_all(comment="EOD 3:55")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHART VISUALS
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORB build period background
+bgcolor(in_orb_period ? color.new(color.yellow, 88) : na, title="ORB Build Window")
+
+// Breakout arrows
+plotshape(long_signal,  "Long Breakout",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.normal)
+plotshape(short_signal, "Short Breakout", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.normal)
+
+// Tweezer exit markers (only shown when we have an open runner)
+plotshape(tweezer_top and be_active and strategy.position_size > 0,
+          "Tweezer Top Exit", shape.xcross, location.abovebar, color.new(color.orange, 0), size=size.small)
+plotshape(tweezer_bot and be_active and strategy.position_size < 0,
+          "Tweezer Bot Exit", shape.xcross, location.belowbar, color.new(color.orange, 0), size=size.small)

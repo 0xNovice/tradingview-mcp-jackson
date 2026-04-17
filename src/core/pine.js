@@ -36,29 +36,36 @@ const FIND_MONACO = `
 `;
 
 /**
- * Opens the Pine Editor panel and waits for Monaco to become available.
+ * Opens the Pine Editor panel and waits for the textarea to become available.
+ * Tries React-fiber Monaco first; falls back to textarea presence check.
  * Returns true if editor is accessible, false on timeout.
  */
 export async function ensurePineEditorOpen() {
-  const already = await evaluate(`
+  // Fast path: Monaco via React fiber (works on older TV builds)
+  const fiberReady = await evaluate(`
     (function() {
       var m = ${FIND_MONACO};
       return m !== null;
     })()
   `);
-  if (already) return true;
+  if (fiberReady) return true;
 
+  // Fast path 2: textarea present (newer TV builds — fiber not on DOM node)
+  const taReady = await evaluate(`
+    (function() {
+      return !!document.querySelector('.monaco-editor.pine-editor-monaco .inputarea');
+    })()
+  `);
+  if (taReady) return true;
+
+  // Open the editor
   await evaluate(`
     (function() {
       var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
-      if (!bwb) return;
-      if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab();
-      else if (typeof bwb.showWidget === 'function') bwb.showWidget('pine-editor');
-    })()
-  `);
-
-  await evaluate(`
-    (function() {
+      if (bwb) {
+        if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab();
+        else if (typeof bwb.showWidget === 'function') bwb.showWidget('pine-editor');
+      }
       var btn = document.querySelector('[aria-label="Pine"]')
         || document.querySelector('[data-name="pine-dialog-button"]');
       if (btn) btn.click();
@@ -67,7 +74,12 @@ export async function ensurePineEditorOpen() {
 
   for (let i = 0; i < 50; i++) {
     await new Promise(r => setTimeout(r, 200));
-    const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`);
+    const ready = await evaluate(`
+      (function() {
+        if (${FIND_MONACO} !== null) return true;
+        return !!document.querySelector('.monaco-editor.pine-editor-monaco .inputarea');
+      })()
+    `);
     if (ready) return true;
   }
   return false;
@@ -267,6 +279,7 @@ export async function setSource({ source }) {
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
+  // Primary path: React fiber → Monaco setValue()
   const escaped = JSON.stringify(source);
   const set = await evaluate(`
     (function() {
@@ -276,9 +289,115 @@ export async function setSource({ source }) {
       return true;
     })()
   `);
+  if (set) return { success: true, lines_set: source.split('\n').length, method: 'monaco_setValue' };
 
-  if (!set) throw new Error('Monaco found but setValue() failed.');
-  return { success: true, lines_set: source.split('\n').length };
+  // Fallback: CDP insertText (newer TV builds where React fiber is detached from DOM)
+  // Before injecting, ensure we are NOT in a read-only/protected script.
+  // If the editor shows a protected script, keystrokes are rejected by Monaco.
+  const isProtected = await evaluate(`
+    (function() {
+      // TradingView marks protected scripts with a lock icon or specific classes/attributes
+      var lockIcon = document.querySelector('[class*="protected"], [class*="lock-icon"], [data-protected="true"]');
+      if (lockIcon) return true;
+      // Check if the editor textarea is marked readonly
+      var ta = document.querySelector('.monaco-editor.pine-editor-monaco .inputarea');
+      if (ta && ta.readOnly) return true;
+      // Check script title area for "(protected)" text
+      var header = document.querySelector('[class*="pine-editor"] [class*="header"], [class*="scriptHeader"]');
+      if (header && /protected/i.test(header.textContent)) return true;
+      return false;
+    })()
+  `);
+
+  if (isProtected) {
+    // Open a new blank script to get a writable editor context
+    await _openNewBlankScript('indicator');
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  const c = await getClient();
+
+  // Focus the Monaco textarea
+  await evaluate(`
+    (function() {
+      var ta = document.querySelector('.monaco-editor.pine-editor-monaco .inputarea');
+      if (ta) { ta.focus(); ta.click(); }
+    })()
+  `);
+  await new Promise(r => setTimeout(r, 150));
+
+  // Ctrl+A — select all existing content
+  await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
+  await new Promise(r => setTimeout(r, 150));
+
+  // Insert the new source (replaces selection)
+  await c.Input.insertText({ text: source });
+  await new Promise(r => setTimeout(r, 400));
+
+  return { success: true, lines_set: source.split('\n').length, method: 'cdp_insertText' };
+}
+
+/**
+ * Internal helper: navigates the Pine Editor UI to open a blank script.
+ * Used as a fallback when the current editor is showing a protected/read-only script.
+ */
+async function _openNewBlankScript(type) {
+  // Try clicking the script name/title button to open the file dropdown
+  const menuOpened = await evaluate(`
+    (function() {
+      // Pine Editor header usually has the script name as a clickable button/span
+      var selectors = [
+        '[data-name="pine-editor"] [class*="header"] button',
+        '[class*="pine-editor"] [class*="scriptName"]',
+        '[class*="pineEditorTabs"] [class*="newScript"]',
+        '[class*="bottomWidgetBar"] [class*="pine"] button[class*="new"]',
+      ];
+      for (var s = 0; s < selectors.length; s++) {
+        var el = document.querySelector(selectors[s]);
+        if (el && el.offsetParent !== null) { el.click(); return selectors[s]; }
+      }
+      // Fallback: look for any visible "New" button in the Pine Editor area
+      var btns = document.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {
+        var lbl = (btns[i].getAttribute('aria-label') || btns[i].title || '').toLowerCase();
+        var txt = btns[i].textContent.trim().toLowerCase();
+        if ((lbl.includes('new') || txt === 'new') && btns[i].offsetParent !== null) {
+          btns[i].click();
+          return 'new_button:' + (lbl || txt);
+        }
+      }
+      return null;
+    })()
+  `);
+
+  if (!menuOpened) return false;
+  await new Promise(r => setTimeout(r, 350));
+
+  // Click the appropriate "New blank indicator/strategy" item in the dropdown
+  const typeKw = type === 'strategy' ? 'strategy' : type === 'library' ? 'library' : 'indicator';
+  const itemClicked = await evaluate(`
+    (function(kw) {
+      var candidates = document.querySelectorAll('[role="menuitem"], [role="option"], [class*="menuItem"], li');
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].offsetParent === null) continue;
+        var t = candidates[i].textContent.trim().toLowerCase();
+        if (t.includes('new') && t.includes(kw)) { candidates[i].click(); return t; }
+      }
+      // Fallback: click any "new blank" item
+      for (var j = 0; j < candidates.length; j++) {
+        if (candidates[j].offsetParent === null) continue;
+        var t2 = candidates[j].textContent.trim().toLowerCase();
+        if (t2.includes('new blank') || t2.includes('new indicator') || t2.includes('new strategy')) {
+          candidates[j].click();
+          return t2;
+        }
+      }
+      return null;
+    })(${JSON.stringify(typeKw)})
+  `);
+
+  return !!itemClicked;
 }
 
 export async function compile() {
@@ -518,7 +637,7 @@ export async function newScript({ type }) {
 
   const template = templates[type] || templates.indicator;
 
-  // Simply set the source to a new template — this is the most reliable approach
+  // Primary path: React fiber → Monaco setValue()
   const escaped = JSON.stringify(template);
   const set = await evaluate(`
     (function() {
@@ -528,10 +647,30 @@ export async function newScript({ type }) {
       return true;
     })()
   `);
+  if (set) return { success: true, type, action: 'new_script_created', template: typeMap[type], method: 'monaco_setValue' };
 
-  if (!set) throw new Error('Monaco editor not found. Ensure Pine Editor is open.');
+  // Fallback: navigate TV UI to open a real blank script, then inject via CDP
+  await _openNewBlankScript(type || 'indicator');
+  await new Promise(r => setTimeout(r, 600));
 
-  return { success: true, type, action: 'new_script_created', template: typeMap[type] };
+  const c = await getClient();
+
+  await evaluate(`
+    (function() {
+      var ta = document.querySelector('.monaco-editor.pine-editor-monaco .inputarea');
+      if (ta) { ta.focus(); ta.click(); }
+    })()
+  `);
+  await new Promise(r => setTimeout(r, 150));
+
+  await c.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 2, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
+  await new Promise(r => setTimeout(r, 150));
+
+  await c.Input.insertText({ text: template });
+  await new Promise(r => setTimeout(r, 300));
+
+  return { success: true, type, action: 'new_script_created', template: typeMap[type], method: 'cdp_insertText' };
 }
 
 export async function openScript({ name }) {

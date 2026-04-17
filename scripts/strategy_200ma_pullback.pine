@@ -1,0 +1,138 @@
+//@version=6
+strategy("200 MA + Footprint Logic — Final",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     slippage=2,
+     max_bars_back=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+ma_len    = input.int(200,   "MA Length",           group="Indicators")
+rsi_len   = input.int(14,    "RSI Length",          group="Indicators")
+atr_len   = input.int(14,    "ATR Length",          group="Indicators")
+delta_min = input.float(0.55,"Min Delta Ratio",     group="Footprint", minval=0.3, step=0.05,
+             tooltip="Close must be in top X% of bar range (buy-side control). 0.55 = top 45%.")
+vol_node  = input.int(20,    "Volume Node Lookback",group="Footprint", minval=5,
+             tooltip="Bars to look back for high-volume cluster confirmation.")
+adx_min   = input.int(20,    "Min ADX",             group="Filters")
+atr_mult  = input.float(1.5, "ATR Stop Mult",       group="Risk", minval=0.5, step=0.1)
+rr        = input.float(2.0, "Risk:Reward",         group="Risk", minval=1.0, step=0.1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+ma15     = ta.sma(close, ma_len)
+ma50     = ta.sma(close, 50)
+rsi15    = ta.rsi(close, rsi_len)
+atr14    = ta.atr(atr_len)
+vol_avg  = ta.sma(volume, vol_node)
+[di_plus, di_minus, adx] = ta.dmi(14, 14)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FOOTPRINT PROXY — Replicates order flow logic from Footprint IQ Pro
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// 1. BAR DELTA PROXY
+//    Measures where price closed relative to the full bar range.
+//    High value = buyers absorbed selling and closed strong (bullish delta).
+//    Close near high  → buyers in control  (like positive delta in footprint)
+//    Close near low   → sellers in control (like negative delta in footprint)
+bar_range     = high - low
+delta_ratio   = bar_range > 0 ? (close - low) / bar_range : 0.5  // 0=bearish, 1=bullish
+
+// 2. CUMULATIVE DELTA PROXY (3-bar rolling)
+//    Sustained buying pressure over recent bars — not just one bar spike.
+delta_3bar = (delta_ratio + delta_ratio[1] + delta_ratio[2]) / 3
+
+// 3. VOLUME ABOVE AVERAGE — participation required
+vol_ok_fp = volume >= vol_avg * 1.1
+
+// 4. FOOTPRINT LONG / SHORT SIGNAL
+//    Delta ratio above threshold + sustained 3-bar buying + volume participation.
+//    Deliberately kept simple so it doesn't over-filter alongside the MA + HTF stack.
+fp_long  = delta_ratio     >= delta_min and delta_3bar >= 0.52 and vol_ok_fp
+fp_short = (1-delta_ratio) >= delta_min and delta_3bar <= 0.48 and vol_ok_fp
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MULTI-TF TREND FILTER (Daily + 4H + 1H)
+// ═══════════════════════════════════════════════════════════════════════════════
+h1_close = request.security(syminfo.tickerid, "60",  close,             lookahead=barmerge.lookahead_off)
+h1_ma200 = request.security(syminfo.tickerid, "60",  ta.sma(close,200), lookahead=barmerge.lookahead_off)
+h4_close = request.security(syminfo.tickerid, "240", close,             lookahead=barmerge.lookahead_off)
+h4_ma200 = request.security(syminfo.tickerid, "240", ta.sma(close,200), lookahead=barmerge.lookahead_off)
+d1_close = request.security(syminfo.tickerid, "D",   close,             lookahead=barmerge.lookahead_off)
+d1_ma200 = request.security(syminfo.tickerid, "D",   ta.sma(close,200), lookahead=barmerge.lookahead_off)
+
+// 4H + 1H alignment (Daily removed — too restrictive during transitional markets)
+bull_htf = h1_close > h1_ma200 and h4_close > h4_ma200
+bear_htf = h1_close < h1_ma200 and h4_close < h4_ma200
+
+ma15_rising  = ma15 > ma15[20]
+ma15_falling = ma15 < ma15[20]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 200 MA TOUCH CONDITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+low_touched_ma  = low  <= ma15 * 1.002 and close > ma15
+high_touched_ma = high >= ma15 * 0.998 and close < ma15
+
+near_ma      = math.abs(close[1] - ma15[1]) < atr14 * 3.0
+rsi_long_ok  = rsi15 >= 48 and rsi15 <= 70
+rsi_short_ok = rsi15 >= 30 and rsi15 <= 52
+trend_ok     = adx > adx_min
+di_long_ok   = di_plus > di_minus
+di_short_ok  = di_minus > di_plus
+no_trade     = strategy.opentrades == 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FINAL ENTRY SIGNALS
+//   200 MA touch/reclaim  +  Footprint buy-side confirmation  +  Trend alignment
+// ═══════════════════════════════════════════════════════════════════════════════
+long_entry  = bull_htf and ma15_rising and low_touched_ma and fp_long  and near_ma and rsi_long_ok  and trend_ok and di_long_ok  and no_trade
+short_entry = bear_htf and ma15_falling and high_touched_ma and fp_short and near_ma and rsi_short_ok and trend_ok and di_short_ok and no_trade
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE EXECUTION
+// ═══════════════════════════════════════════════════════════════════════════════
+if long_entry
+    sl = math.min(low, ma15) - atr14 * 0.3
+    tp = close + (close - sl) * rr
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=sl, limit=tp)
+
+if short_entry
+    sl = math.max(high, ma15) + atr14 * 0.3
+    tp = close - (sl - close) * rr
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=sl, limit=tp)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ═══════════════════════════════════════════════════════════════════════════════
+plot(ma15,    "200 SMA (15M)", color=color.yellow, linewidth=2)
+plot(ma50,    "50 SMA (15M)",  color=color.orange, linewidth=1)
+plot(h1_ma200,"200 SMA (1H)", color=color.blue,   linewidth=1)
+plot(h4_ma200,"200 SMA (4H)", color=color.purple, linewidth=1)
+
+// Footprint delta color — bars colored by buy/sell pressure (like footprint heatmap)
+barcolor(delta_ratio >= 0.65 ? color.new(color.lime, 40) :
+         delta_ratio <= 0.35 ? color.new(color.red,  40) : na,
+         title="Footprint Delta Bars")
+
+bgcolor(bull_htf and trend_ok ? color.new(color.green, 95) :
+        bear_htf and trend_ok ? color.new(color.red,   95) : na,
+        title="HTF Bias")
+
+plotshape(long_entry,  "Long Signal",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.normal)
+plotshape(short_entry, "Short Signal", shape.triangledown,  location.abovebar, color.new(color.red,  0), size=size.normal)
+
+// Footprint delta label on signal bars
+if long_entry
+    label.new(bar_index, low - atr14, "δ+" + str.tostring(math.round(delta_ratio*100)) + "%\nVol:" + str.tostring(math.round(volume/vol_avg*10)/10) + "x", style=label.style_label_up, color=color.new(color.lime,20), textcolor=color.black, size=size.small)
+if short_entry
+    label.new(bar_index, high + atr14, "δ-" + str.tostring(math.round((1-delta_ratio)*100)) + "%\nVol:" + str.tostring(math.round(volume/vol_avg*10)/10) + "x", style=label.style_label_down, color=color.new(color.red,20), textcolor=color.white, size=size.small)

@@ -189,6 +189,20 @@ export async function launch({ port, kill_existing } = {}) {
     if (p && existsSync(p)) { tvPath = p; break; }
   }
 
+  // Windows Store (MSIX) — use PowerShell to resolve versioned install path
+  if (!tvPath && platform === 'win32') {
+    try {
+      const installDir = execSync(
+        'powershell -Command "Get-AppxPackage -Name TradingView.Desktop | Select-Object -ExpandProperty InstallLocation"',
+        { timeout: 5000 }
+      ).toString().trim();
+      if (installDir) {
+        const candidate = `${installDir}\\TradingView.exe`;
+        if (existsSync(candidate)) tvPath = candidate;
+      }
+    } catch { /* not a Store install or PowerShell unavailable */ }
+  }
+
   if (!tvPath) {
     try {
       const cmd = platform === 'win32' ? 'where TradingView.exe' : 'which tradingview';
