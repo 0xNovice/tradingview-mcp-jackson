@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('mcpServers', {}\\), indent=2\\)\\)\")",
+      "Bash(node *)",
+      "Bash(/c/Program Files/nodejs/node *)",
+      "Bash(curl -s --max-time 3 http://localhost:9222/json/version)",
+      "WebSearch",
+      "Bash(git remote *)",
+      "Bash(git pull *)",
+      "Bash(git reset *)",
+      "Bash(gh *)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/GitHub CLI\")",
+      "Bash(git config *)",
+      "Bash(git push *)",
+      "Bash(/c/Program Files/WindowsApps/TradingView.Desktop_3.0.0.7652_x64__n534cwy3pjxzj/TradingView.exe *)",
+      "Bash(curl -s http://localhost:9222/json)",
+      "Bash(curl -s http://localhost:9222/json/version)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(tasklist)"
+    ]
+  }
+}

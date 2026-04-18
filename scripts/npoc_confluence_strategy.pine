@@ -1,38 +1,90 @@
 //@version=6
-indicator("Session Naked POCs + Value Areas",
-          overlay        = true,
-          max_lines_count  = 500,
-          max_labels_count = 500,
-          max_bars_back    = 5000)
+strategy("Session NPOCs + Confluence Entry",
+         overlay          = true,
+         max_lines_count  = 500,
+         max_labels_count = 500,
+         max_bars_back    = 5000,
+         initial_capital  = 10000,
+         default_qty_type = strategy.percent_of_equity,
+         default_qty_value = 100,
+         commission_type  = strategy.commission.percent,
+         commission_value = 0.05)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// INPUTS
+// SESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 grp_s = "Sessions"
-show_daily  = input.bool(true,  "Daily (00:00–00:00 UTC)",    group=grp_s)
-show_asian  = input.bool(true,  "Asian (00:00–08:00 UTC)",    group=grp_s)
-show_ny     = input.bool(true,  "NY (13:30–22:00 UTC)",       group=grp_s)
-show_va     = input.bool(true,  "Show VAH / VAL",              group=grp_s)
+show_daily = input.bool(true, "Daily (00:00–00:00 UTC)",  group=grp_s)
+show_asian = input.bool(true, "Asian (00:00–08:00 UTC)",  group=grp_s)
+show_ny    = input.bool(true, "NY (13:30–22:00 UTC)",     group=grp_s)
+show_va    = input.bool(true, "Show VAH / VAL",            group=grp_s)
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPLAY
+// ═══════════════════════════════════════════════════════════════════════════════
 grp_d = "Display"
-max_npoc     = input.int(5,      "Last N POCs to show per session",  group=grp_d, minval=1, maxval=20)
-lookback     = input.int(14,     "History (days)",                   group=grp_d, minval=1, maxval=60)
-show_naked   = input.bool(true,  "Show Naked POCs",                  group=grp_d)
-show_filled  = input.bool(true,  "Show Touched POCs",                group=grp_d)
+max_npoc    = input.int(5,     "Last N POCs to show per session",   group=grp_d, minval=1, maxval=20)
+lookback    = input.int(14,    "History (days)",                    group=grp_d, minval=1, maxval=60)
+show_naked  = input.bool(true, "Show Naked POCs",                   group=grp_d)
+show_filled = input.bool(true, "Show Touched POCs",                 group=grp_d)
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOLUME PROFILE
+// ═══════════════════════════════════════════════════════════════════════════════
 grp_vp = "Volume Profile"
-bkt_sz  = input.float(100.0, "Bucket Size ($)",  group=grp_vp, minval=1.0,  step=10.0,
-          tooltip="Price increment per bucket. 100 = one bucket per $100. Use 50–200 for BTC.")
-va_pct  = input.float(70.0,  "Value Area %",     group=grp_vp, minval=50.0, maxval=95.0, step=5.0)
+bkt_sz = input.float(100.0, "Bucket Size ($)", group=grp_vp, minval=1.0, step=10.0,
+         tooltip="Price increment per bucket. Use 50–200 for BTC.")
+va_pct = input.float(70.0,  "Value Area %",   group=grp_vp, minval=50.0, maxval=95.0, step=5.0)
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// STYLE
+// ═══════════════════════════════════════════════════════════════════════════════
 grp_c = "Style"
 npoc_col   = input.color(color.orange,                "Naked POC",  group=grp_c)
-filled_col = input.color(color.new(color.gray, 70),   "Filled POC", group=grp_c)
+filled_col = input.color(color.new(color.gray, 50),   "Filled POC", group=grp_c)
 vah_col    = input.color(color.new(color.teal, 20),   "VAH",        group=grp_c)
 val_col    = input.color(color.new(color.purple, 20), "VAL",        group=grp_c)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SESSION DETECTION  (all times UTC)
+// MOVING AVERAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_ma = "Moving Averages"
+ma_fast_len = input.int(21,  "Fast MA",  group=grp_ma, minval=1)
+ma_slow_len = input.int(50,  "Slow MA",  group=grp_ma, minval=1)
+ma_type     = input.string("EMA", "MA Type", group=grp_ma, options=["EMA", "SMA"])
+
+ma_fast = ma_type == "EMA" ? ta.ema(close, ma_fast_len) : ta.sma(close, ma_fast_len)
+ma_slow = ma_type == "EMA" ? ta.ema(close, ma_slow_len) : ta.sma(close, ma_slow_len)
+
+plot(ma_fast, "Fast MA", color=color.new(color.white, 30), linewidth=1)
+plot(ma_slow, "Slow MA", color=color.new(color.red,   30), linewidth=1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RSI
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_rsi = "RSI"
+rsi_len         = input.int(14,   "RSI Length",        group=grp_rsi, minval=1)
+rsi_long_thresh = input.int(50,   "Long threshold  ≥", group=grp_rsi, minval=1,  maxval=100)
+rsi_short_thresh= input.int(50,   "Short threshold ≤", group=grp_rsi, minval=1,  maxval=100)
+
+rsi_val = ta.rsi(close, rsi_len)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY FRAMEWORK
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_e = "Entry Framework"
+proximity_mult = input.float(1.0,  "NPOC Proximity (× bucket size)", group=grp_e, minval=0.1, step=0.1,
+                tooltip="How close price must be to a Naked POC to trigger. 1.0 = within one bucket.")
+sl_atr_mult    = input.float(1.5,  "Stop Loss (× ATR)",              group=grp_e, minval=0.1, step=0.1)
+tp_rr          = input.float(2.0,  "Take Profit (R:R ratio)",        group=grp_e, minval=0.1, step=0.1)
+atr_len        = input.int(14,     "ATR Length",                     group=grp_e, minval=1)
+use_alerts     = input.bool(false, "Enable Alerts",                   group=grp_e)
+
+atr_val   = ta.atr(atr_len)
+proximity = bkt_sz * proximity_mult
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION (UTC)
 // ═══════════════════════════════════════════════════════════════════════════════
 int  t_hm     = hour(time, "UTC") * 100 + minute(time, "UTC")
 bool in_asian = t_hm >= 0    and t_hm < 800
@@ -46,8 +98,6 @@ bool ny_clos    = not in_ny    and in_ny[1]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VOLUME PROFILE ACCUMULATORS
-//   map<bucket_index, accumulated_volume>
-//   bucket_index = math.floor(price / bkt_sz)
 // ═══════════════════════════════════════════════════════════════════════════════
 var map<int,float> d_m = map.new<int,float>()
 var map<int,float> a_m = map.new<int,float>()
@@ -61,7 +111,7 @@ var int a_t0   = na
 var int n_t0   = na
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// COMPLETED LEVEL STORAGE  (one row per session close)
+// COMPLETED LEVEL STORAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 var float[]  st_poc    = array.new_float()
 var float[]  st_vah    = array.new_float()
@@ -83,7 +133,6 @@ var label[]  st_vllb   = array.new_label()
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Distribute one bar's volume across all $bkt_sz buckets it spans
 addBar(map<int,float> m, float b_lo, float b_hi, float b_vol) =>
     int lo_b = math.floor(b_lo / bkt_sz)
     int hi_b = math.floor(b_hi / bkt_sz)
@@ -93,7 +142,6 @@ addBar(map<int,float> m, float b_lo, float b_hi, float b_vol) =>
         float cur = na(map.get(m, i)) ? 0.0 : map.get(m, i)
         map.put(m, i, cur + vpb)
 
-// Find the price of the highest-volume bucket  →  POC
 calcPOC(map<int,float> m) =>
     float mx = 0.0
     int   pb = na
@@ -103,7 +151,6 @@ calcPOC(map<int,float> m) =>
             pb := k
     na(pb) ? na : (pb + 0.5) * bkt_sz
 
-// Expand outward from POC until va_pct% of volume is captured  →  VAH, VAL
 calcVA(map<int,float> m, float poc_p) =>
     float vah_r = na
     float val_r = na
@@ -133,7 +180,6 @@ calcVA(map<int,float> m, float poc_p) =>
         val_r :=  lo_b      * bkt_sz
     [vah_r, val_r]
 
-// Count all POCs (filled or naked) for a given session label
 countTotal(string stype) =>
     int cnt = 0
     int sz  = array.size(st_sess)
@@ -143,7 +189,6 @@ countTotal(string stype) =>
                 cnt += 1
     cnt
 
-// Delete the oldest POC entry entirely (filled or naked) to make room
 pruneOldest(string stype) =>
     int sz = array.size(st_sess)
     if sz > 0
@@ -173,18 +218,15 @@ pruneOldest(string stype) =>
                 array.remove(st_vllb,   i)
                 break
 
-// Store a completed session's POC + VA and create drawing objects
 commitSession(map<int,float> m, string stype, int bar0, int t0) =>
     float poc_p = calcPOC(m)
     if not na(poc_p)
         [vah_p, val_p] = calcVA(m, poc_p)
         bool has_va = show_va and not na(vah_p) and not na(val_p)
 
-        // Enforce max_npoc — prune oldest (filled or naked) to keep last N visible
         if countTotal(stype) >= max_npoc
             pruneOldest(stype)
 
-        // POC
         line ln_p = line.new(bar0, poc_p, bar_index, poc_p,
                              xloc=xloc.bar_index, extend=extend.none,
                              color=npoc_col, width=1, style=line.style_dashed)
@@ -195,7 +237,6 @@ commitSession(map<int,float> m, string stype, int bar0, int t0) =>
                                color=color.new(npoc_col, 15),
                                textcolor=color.white, size=size.small)
 
-        // VAH / VAL (conditional)
         line  ln_vh = na
         line  ln_vl = na
         label lb_vh = na
@@ -220,7 +261,6 @@ commitSession(map<int,float> m, string stype, int bar0, int t0) =>
                                color=color.new(val_col, 40),
                                textcolor=color.white, size=size.tiny)
 
-        // Persist to storage arrays
         array.push(st_poc,    poc_p)
         array.push(st_vah,    has_va ? vah_p : na)
         array.push(st_val,    has_va ? val_p : na)
@@ -238,10 +278,9 @@ commitSession(map<int,float> m, string stype, int bar0, int t0) =>
         array.push(st_vllb,   lb_vl)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACCUMULATE PROFILES EACH BAR
+// ACCUMULATE PROFILES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Daily ──
 if new_day
     if show_daily and not na(d_bar0) and map.size(d_m) > 0
         commitSession(d_m, "D", d_bar0, d_t0)
@@ -250,7 +289,6 @@ if new_day
     d_t0   := time
 addBar(d_m, low, high, volume)
 
-// ── Asian ──
 if asian_open
     a_m    := map.new<int,float>()
     a_bar0 := bar_index
@@ -260,7 +298,6 @@ if in_asian
 if asian_clos and show_asian and not na(a_bar0) and map.size(a_m) > 0
     commitSession(a_m, "A", a_bar0, a_t0)
 
-// ── NY ──
 if ny_open
     n_m    := map.new<int,float>()
     n_bar0 := bar_index
@@ -271,9 +308,12 @@ if ny_clos and show_ny and not na(n_bar0) and map.size(n_m) > 0
     commitSession(n_m, "N", n_bar0, n_t0)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PER-BAR  —  FILL DETECTION + LINE EXTENSION + LOOKBACK EXPIRY
+// PER-BAR — FILL DETECTION + LINE EXTENSION + EXPIRY
 // ═══════════════════════════════════════════════════════════════════════════════
 int max_age_ms = lookback * 86400000
+
+float nearest_above = na
+float nearest_below = na
 
 int n_lvl = array.size(st_poc)
 if n_lvl > 0
@@ -288,7 +328,6 @@ if n_lvl > 0
 
         bool expired = (time - t0) > max_age_ms
 
-        // Fill: price touched the POC level
         if not done and low <= p and high >= p
             array.set(st_pfill, i, true)
             done := true
@@ -318,17 +357,21 @@ if n_lvl > 0
                 line.set_color(pln,  color.new(color.black, 100))
                 label.set_color(plb, color.new(color.black, 100))
 
-        // ── VA lines (same logic) ──
+            // Track nearest naked POCs for entry signals
+            if p > close
+                nearest_above := na(nearest_above) ? p : math.min(nearest_above, p)
+            else if p < close
+                nearest_below := na(nearest_below) ? p : math.max(nearest_below, p)
+
         if hva and not expired
-            float  vh    = array.get(st_vah,  i)
-            float  vl    = array.get(st_val,  i)
+            float  vh    = array.get(st_vah,   i)
+            float  vl    = array.get(st_val,   i)
             bool   vdone = array.get(st_vfill, i)
             line   vhln  = array.get(st_vhln,  i)
             line   vlln  = array.get(st_vlln,  i)
             label  vhlb  = array.get(st_vhlb,  i)
             label  vllb  = array.get(st_vllb,  i)
 
-            // VA "fill": price has left the value area
             if not vdone and (high > vh or low < vl)
                 array.set(st_vfill, i, true)
                 vdone := true
@@ -345,24 +388,66 @@ if n_lvl > 0
                 label.set_x(vllb, bar_index)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NEAREST NAKED POC LEVELS (plots — for use by strategy scripts)
+// CONFLUENCE SIGNALS
 // ═══════════════════════════════════════════════════════════════════════════════
-float nearest_above = na
-float nearest_below = na
 
-int sz = array.size(st_poc)
-if sz > 0
-    for i = 0 to sz - 1
-        if not array.get(st_pfill, i)
-            float p = array.get(st_poc, i)
-            if p > close
-                nearest_above := na(nearest_above) ? p : math.min(nearest_above, p)
-            else if p < close
-                nearest_below := na(nearest_below) ? p : math.max(nearest_below, p)
+// Near a naked POC
+bool near_npoc_support    = not na(nearest_below) and math.abs(low  - nearest_below) <= proximity
+bool near_npoc_resistance = not na(nearest_above) and math.abs(high - nearest_above) <= proximity
 
+// MA alignment
+bool ma_bullish = close > ma_fast and close > ma_slow
+bool ma_bearish = close < ma_fast and close < ma_slow
+
+// RSI alignment
+bool rsi_bullish = rsi_val >= rsi_long_thresh
+bool rsi_bearish = rsi_val <= rsi_short_thresh
+
+// Full confluence
+bool long_signal  = near_npoc_support    and rsi_bullish and ma_bullish
+bool short_signal = near_npoc_resistance and rsi_bearish and ma_bearish
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRATEGY ENTRIES / EXITS
+// ═══════════════════════════════════════════════════════════════════════════════
+float sl_dist = atr_val * sl_atr_mult
+float tp_dist = sl_dist * tp_rr
+
+if long_signal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long",
+                  stop  = strategy.position_avg_price - sl_dist,
+                  limit = strategy.position_avg_price + tp_dist)
+
+if short_signal and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short",
+                  stop  = strategy.position_avg_price + sl_dist,
+                  limit = strategy.position_avg_price - tp_dist)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIGNAL SHAPES ON CHART
+// ═══════════════════════════════════════════════════════════════════════════════
+plotshape(long_signal,  title="Long Signal",  location=location.belowbar,
+          style=shape.labelup,   color=color.new(color.lime, 0),
+          textcolor=color.black, text="▲ NPOC\nConfluence", size=size.small)
+
+plotshape(short_signal, title="Short Signal", location=location.abovebar,
+          style=shape.labeldown, color=color.new(color.red, 0),
+          textcolor=color.white, text="▼ NPOC\nConfluence", size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEAREST NPOC PLOTS (for reference)
+// ═══════════════════════════════════════════════════════════════════════════════
 plot(nearest_above, "Nearest NPoc Above", color=color.new(npoc_col, 60), linewidth=1, style=plot.style_circles)
 plot(nearest_below, "Nearest NPoc Below", color=color.new(npoc_col, 60), linewidth=1, style=plot.style_circles)
 
-// Session background shading (subtle)
+// ═══════════════════════════════════════════════════════════════════════════════
+// OPTIONAL ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+alertcondition(use_alerts and long_signal,  "NPOC Long Confluence",  "NPOC Long Confluence: Price at naked POC support + RSI + MA aligned bullish")
+alertcondition(use_alerts and short_signal, "NPOC Short Confluence", "NPOC Short Confluence: Price at naked POC resistance + RSI + MA aligned bearish")
+
+// Session background shading
 bgcolor(in_asian ? color.new(color.blue,   97) : na, title="Asian Session")
 bgcolor(in_ny    ? color.new(color.yellow, 97) : na, title="NY Session")
