@@ -1,6 +1,6 @@
 //@version=6
-indicator("Session Naked POCs + Value Areas",
-          overlay        = true,
+indicator("Session Naked POCs + Pre-Trade Checklist | 21/200/800 MA",
+          overlay          = true,
           max_lines_count  = 500,
           max_labels_count = 500,
           max_bars_back    = 5000)
@@ -30,6 +30,73 @@ npoc_col   = input.color(color.orange,                "Naked POC",  group=grp_c)
 filled_col = input.color(color.new(color.gray, 70),   "Filled POC", group=grp_c)
 vah_col    = input.color(color.new(color.teal, 20),   "VAH",        group=grp_c)
 val_col    = input.color(color.new(color.purple, 20), "VAL",        group=grp_c)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOVING AVERAGES  (21 EMA / 200 EMA / 200 SMA / 800 SMA)
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_ma = "Moving Averages"
+ma_fast_len = input.int(21,  "Fast MA (21)",  group=grp_ma, minval=1)
+ma_slow_len = input.int(200, "Slow MA (200)", group=grp_ma, minval=1)
+ma_type     = input.string("EMA", "Fast/Slow Type", group=grp_ma, options=["EMA", "SMA"])
+
+ma_fast = ma_type == "EMA" ? ta.ema(close, ma_fast_len) : ta.sma(close, ma_fast_len)
+ma_slow = ma_type == "EMA" ? ta.ema(close, ma_slow_len) : ta.sma(close, ma_slow_len)
+ma_200s = ta.sma(close, 200)
+ma_800s = ta.sma(close, 800)
+
+plot(ma_fast, "21 MA",   color=color.new(color.aqua,   0), linewidth=1)
+plot(ma_slow, "200 MA",  color=color.new(color.red,    0), linewidth=2)
+plot(ma_200s, "200 SMA", color=color.new(color.yellow, 0), linewidth=1)
+plot(ma_800s, "800 SMA", color=color.new(color.fuchsia,0), linewidth=2)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RSI
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_rsi = "RSI"
+rsi_len = input.int(14, "RSI Length", group=grp_rsi, minval=1)
+rsi_val = ta.rsi(close, rsi_len)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MACD
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_macd = "MACD"
+macd_fast_len  = input.int(12, "Fast Length",   group=grp_macd, minval=1)
+macd_slow_len2 = input.int(26, "Slow Length",   group=grp_macd, minval=1)
+macd_sig_len   = input.int(9,  "Signal Length", group=grp_macd, minval=1)
+
+[macd_line, macd_signal_line, macd_hist] = ta.macd(close, macd_fast_len, macd_slow_len2, macd_sig_len)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STOCHASTIC
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_stoch = "Stochastic"
+stoch_k_len  = input.int(14, "K Length",    group=grp_stoch, minval=1)
+stoch_d_len  = input.int(3,  "D Smoothing", group=grp_stoch, minval=1)
+stoch_sm_len = input.int(3,  "K Smoothing", group=grp_stoch, minval=1)
+
+stoch_k = ta.sma(ta.stoch(close, high, low, stoch_k_len), stoch_sm_len)
+stoch_d = ta.sma(stoch_k, stoch_d_len)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRE-TRADE CHECKLIST SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+grp_cl = "Pre-Trade Checklist"
+proximity_mult = input.float(1.0, "NPOC Proximity (× bucket size)", group=grp_cl, minval=0.1, step=0.1)
+swing_lb       = input.int(20,    "Swing Lookback (bars)",          group=grp_cl, minval=5, maxval=100)
+atr_len        = input.int(14,    "ATR Length",                     group=grp_cl, minval=1)
+show_table     = input.bool(true, "Show Checklist Table",           group=grp_cl)
+use_c1  = input.bool(true,  "1 · Bullish pattern (price > 21 MA)",              group=grp_cl)
+use_c2  = input.bool(true,  "2 · Price at bottom of trend line (near support)", group=grp_cl)
+use_c3  = input.bool(true,  "3 · Price in last 25% of pattern",                 group=grp_cl)
+use_c4  = input.bool(true,  "4 · MACD histogram turning bullish/bearish",       group=grp_cl)
+use_c5  = input.bool(true,  "5 · MACD line curving toward signal",              group=grp_cl)
+use_c6  = input.bool(true,  "6 · RSI + Stoch below/above 50",                  group=grp_cl)
+use_c7  = input.bool(true,  "7 · 21 MA curving toward 200 MA",                 group=grp_cl)
+use_c8  = input.bool(false, "8 · Divergence (RSI vs price)",                   group=grp_cl)
+use_c9  = input.bool(true,  "9 · Near NPOC support/resistance",                group=grp_cl)
+
+atr_val   = ta.atr(atr_len)
+proximity = bkt_sz * proximity_mult
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSION DETECTION  (all times UTC)
@@ -362,6 +429,131 @@ if sz > 0
 
 plot(nearest_above, "Nearest NPoc Above", color=color.new(npoc_col, 60), linewidth=1, style=plot.style_circles)
 plot(nearest_below, "Nearest NPoc Below", color=color.new(npoc_col, 60), linewidth=1, style=plot.style_circles)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRE-TRADE CHECKLIST EVALUATION
+// ═══════════════════════════════════════════════════════════════════════════════
+bool near_npoc_support    = not na(nearest_below) and math.abs(low  - nearest_below) <= proximity
+bool near_npoc_resistance = not na(nearest_above) and math.abs(high - nearest_above) <= proximity
+
+// 1. Bullish/bearish pattern — price above/below 21 MA
+bool c1_l = close > ma_fast
+bool c1_s = close < ma_fast
+
+// 2. Price at bottom of trend line — near 21 MA pullback or NPOC
+bool c2_l = math.abs(close - ma_fast) <= atr_val or near_npoc_support
+bool c2_s = math.abs(close - ma_fast) <= atr_val or near_npoc_resistance
+
+// 3. Price in last 25% of pattern range
+float sw_hi  = ta.highest(high, swing_lb)
+float sw_lo  = ta.lowest(low,  swing_lb)
+float sw_rng = sw_hi - sw_lo
+bool c3_l = sw_rng > 0 and close <= sw_lo + sw_rng * 0.25
+bool c3_s = sw_rng > 0 and close >= sw_hi - sw_rng * 0.25
+
+// 4. MACD histogram turning bullish/bearish
+bool c4_l = macd_hist > macd_hist[1]
+bool c4_s = macd_hist < macd_hist[1]
+
+// 5. MACD line (blue) curving toward signal (red) — pre-cross or fresh cross
+bool macd_cross_up = ta.crossover(macd_line, macd_signal_line)
+bool macd_cross_dn = ta.crossunder(macd_line, macd_signal_line)
+bool c5_l = macd_line > macd_line[1] and (macd_line < macd_signal_line or macd_cross_up)
+bool c5_s = macd_line < macd_line[1] and (macd_line > macd_signal_line or macd_cross_dn)
+
+// 6. RSI + Stochastic below 50 (long) / above 50 (short)
+bool c6_l = rsi_val < 50.0 and stoch_k < 50.0
+bool c6_s = rsi_val > 50.0 and stoch_k > 50.0
+
+// 7. Shorter MA (21) curving toward longer MA (200) — slope positive + gap narrowing or above
+float ma_fast_slope = ma_fast  - ma_fast[5]
+float ma_gap_now    = math.abs(ma_slow  - ma_fast)
+float ma_gap_prev   = math.abs(ma_slow[5] - ma_fast[5])
+bool c7_l = ma_fast_slope > 0 and (ma_fast > ma_slow or ma_gap_now < ma_gap_prev)
+bool c7_s = ma_fast_slope < 0 and (ma_fast < ma_slow or ma_gap_now < ma_gap_prev)
+
+// 8. Divergence — price at recent extreme but RSI diverging
+float rsi_lb_low  = ta.lowest(rsi_val,  swing_lb)
+float rsi_lb_high = ta.highest(rsi_val, swing_lb)
+bool c8_l = low  <= sw_lo * 1.003 and rsi_val > rsi_lb_low  + 2.0
+bool c8_s = high >= sw_hi * 0.997 and rsi_val < rsi_lb_high - 2.0
+
+// 9. Near significant S/R — Naked POC level
+bool c9_l = near_npoc_support
+bool c9_s = near_npoc_resistance
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIVE CHECKLIST TABLE  (top-right corner)
+// ═══════════════════════════════════════════════════════════════════════════════
+f_chk(bool v) => v ? "✓" : "✗"
+f_clr(bool v) => v ? color.new(color.lime, 30) : color.new(color.red, 50)
+
+var table ck_tbl = table.new(position.top_right, 3, 11,
+                             bgcolor      = color.new(color.black, 15),
+                             border_width = 1, border_color = color.new(color.gray, 40),
+                             frame_width  = 1, frame_color  = color.new(color.gray, 20))
+
+if show_table and barstate.islast
+    color hdr_bg = color.new(color.navy, 10)
+
+    table.cell(ck_tbl, 0, 0, "Check",        text_color=color.white, bgcolor=hdr_bg, text_size=size.small)
+    table.cell(ck_tbl, 1, 0, "LONG",         text_color=color.lime,  bgcolor=hdr_bg, text_size=size.small)
+    table.cell(ck_tbl, 2, 0, "SHORT",        text_color=color.red,   bgcolor=hdr_bg, text_size=size.small)
+
+    table.cell(ck_tbl, 0, 1, "1·Pattern",    text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 1, f_chk(c1_l),   text_color=color.white, bgcolor=f_clr(c1_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 1, f_chk(c1_s),   text_color=color.white, bgcolor=f_clr(c1_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 2, "2·Support",    text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 2, f_chk(c2_l),   text_color=color.white, bgcolor=f_clr(c2_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 2, f_chk(c2_s),   text_color=color.white, bgcolor=f_clr(c2_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 3, "3·25% Zone",   text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 3, f_chk(c3_l),   text_color=color.white, bgcolor=f_clr(c3_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 3, f_chk(c3_s),   text_color=color.white, bgcolor=f_clr(c3_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 4, "4·MACD Turn",  text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 4, f_chk(c4_l),   text_color=color.white, bgcolor=f_clr(c4_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 4, f_chk(c4_s),   text_color=color.white, bgcolor=f_clr(c4_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 5, "5·MACD Curl",  text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 5, f_chk(c5_l),   text_color=color.white, bgcolor=f_clr(c5_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 5, f_chk(c5_s),   text_color=color.white, bgcolor=f_clr(c5_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 6, "6·RSI/Stoch",  text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 6, f_chk(c6_l),   text_color=color.white, bgcolor=f_clr(c6_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 6, f_chk(c6_s),   text_color=color.white, bgcolor=f_clr(c6_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 7, "7·MA Curl",    text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 7, f_chk(c7_l),   text_color=color.white, bgcolor=f_clr(c7_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 7, f_chk(c7_s),   text_color=color.white, bgcolor=f_clr(c7_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 8, "8·Diverge",    text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 8, f_chk(c8_l),   text_color=color.white, bgcolor=f_clr(c8_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 8, f_chk(c8_s),   text_color=color.white, bgcolor=f_clr(c8_s), text_size=size.small)
+
+    table.cell(ck_tbl, 0, 9, "9·NPOC S/R",   text_color=color.white, text_size=size.small)
+    table.cell(ck_tbl, 1, 9, f_chk(c9_l),   text_color=color.white, bgcolor=f_clr(c9_l), text_size=size.small)
+    table.cell(ck_tbl, 2, 9, f_chk(c9_s),   text_color=color.white, bgcolor=f_clr(c9_s), text_size=size.small)
+
+    int l_score = (use_c1 and c1_l ? 1 : 0) + (use_c2 and c2_l ? 1 : 0) +
+                  (use_c3 and c3_l ? 1 : 0) + (use_c4 and c4_l ? 1 : 0) +
+                  (use_c5 and c5_l ? 1 : 0) + (use_c6 and c6_l ? 1 : 0) +
+                  (use_c7 and c7_l ? 1 : 0) + (use_c8 and c8_l ? 1 : 0) +
+                  (use_c9 and c9_l ? 1 : 0)
+    int s_score = (use_c1 and c1_s ? 1 : 0) + (use_c2 and c2_s ? 1 : 0) +
+                  (use_c3 and c3_s ? 1 : 0) + (use_c4 and c4_s ? 1 : 0) +
+                  (use_c5 and c5_s ? 1 : 0) + (use_c6 and c6_s ? 1 : 0) +
+                  (use_c7 and c7_s ? 1 : 0) + (use_c8 and c8_s ? 1 : 0) +
+                  (use_c9 and c9_s ? 1 : 0)
+
+    table.cell(ck_tbl, 0, 10, "Score",  text_color=color.white, bgcolor=hdr_bg, text_size=size.small)
+    table.cell(ck_tbl, 1, 10, str.tostring(l_score) + "/9",
+               text_color=color.white,
+               bgcolor=l_score >= 6 ? color.new(color.lime, 0) : hdr_bg, text_size=size.small)
+    table.cell(ck_tbl, 2, 10, str.tostring(s_score) + "/9",
+               text_color=color.white,
+               bgcolor=s_score >= 6 ? color.new(color.red,  0) : hdr_bg, text_size=size.small)
 
 // Session background shading (subtle)
 bgcolor(in_asian ? color.new(color.blue,   97) : na, title="Asian Session")
