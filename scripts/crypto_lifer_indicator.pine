@@ -1,0 +1,462 @@
+//@version=6
+// Crypto Lifer Indicator — Sam Price
+// v6: HTF candles placed in future space (right of price), oldest→newest left→right
+
+indicator(title="Crypto Lifer — Indicator", shorttitle="CL_IND", overlay=true)
+
+// ─── MOVING AVERAGES ─────────────────────────────────────────────────────────
+ma21_len   = input.int(21,  "21 SMA",           group="Moving Averages")
+ma50_len   = input.int(50,  "50 SMA",           group="Moving Averages")
+ma800_len  = input.int(800, "800 SMA",          group="Moving Averages")
+ma100_len  = input.int(100, "100 SMA",          group="Moving Averages")
+ma200_len  = input.int(200, "200 SMA",          group="Moving Averages")
+smooth_len = input.int(50,  "Smooth MA (SMMA)", group="Moving Averages")
+
+ma21      = ta.sma(close, ma21_len)
+ma50      = ta.sma(close, ma50_len)
+ma800     = ta.sma(close, ma800_len)
+ma100     = ta.sma(close, ma100_len)
+ma200     = ta.sma(close, ma200_len)
+smooth_ma = ta.rma(close, smooth_len)
+
+plot(ma21,      "21 SMA",    color=color.white,               linewidth=2)
+plot(ma50,      "50 SMA",    color=color.red,                 linewidth=1)
+plot(ma800,     "800 SMA",   color=color.purple,              linewidth=2)
+plot(ma100,     "100 SMA",   color=color.blue,                linewidth=1)
+plot(ma200,     "200 SMA",   color=color.yellow,              linewidth=2)
+plot(smooth_ma, "Smooth MA", color=color.new(color.teal, 20), linewidth=2)
+
+// ─── MACRO BIAS ──────────────────────────────────────────────────────────────
+bull_bias          = close > ma200
+bear_bias          = close < ma200
+above_smooth       = close > smooth_ma
+above_200_cross    = ta.crossover(close, ma200)
+below_200_cross    = ta.crossunder(close, ma200)
+above_smooth_cross = ta.crossover(close, smooth_ma)
+
+bgcolor(bull_bias ? color.new(color.green, 95) : color.new(color.red, 95), title="Bias Background")
+
+// ─── SESSION FILTER ───────────────────────────────────────────────────────────
+use_session     = input.bool(true,  "Enable Session Filter",                   group="Session Filter")
+show_sess_bg    = input.bool(true,  "Highlight Sessions on Chart",              group="Session Filter")
+use_london_ny   = input.bool(true,  "London-NY Overlap (Best 8am-12pm EST)",   group="Session Filter")
+use_london      = input.bool(true,  "London Session (3am-12pm EST)",            group="Session Filter")
+use_ny          = input.bool(true,  "New York Session (8am-5pm EST)",           group="Session Filter")
+use_tokyo       = input.bool(false, "Tokyo/Asia Session (7pm-4am EST)",         group="Session Filter")
+use_sydney      = input.bool(false, "Sydney Session (5pm-2am EST)",             group="Session Filter")
+use_sam_mon     = input.bool(true,  "Sam Monday Night (6pm-9pm EST)",           group="Session Filter")
+use_sam_tueswed = input.bool(true,  "Sam Tue-Wed Morning (7am-12pm EST)",       group="Session Filter")
+warn_thursday   = input.bool(true,  "Warn on Thursdays (Higher Risk)",          group="Session Filter")
+
+in_london_ny = time(timeframe.period, "1300-1700") != 0
+in_london    = time(timeframe.period, "0800-1700") != 0
+in_ny        = time(timeframe.period, "1300-2200") != 0
+in_tokyo     = time(timeframe.period, "0000-0900") != 0
+in_sydney    = time(timeframe.period, "2200-0700") != 0
+in_sam_mon   = time(timeframe.period, "2300-0200") != 0
+in_sam_tw    = time(timeframe.period, "1200-1700") != 0
+
+is_thursday = dayofweek == dayofweek.thursday
+is_weekend  = dayofweek == dayofweek.saturday or dayofweek == dayofweek.sunday
+
+active_session = (use_london_ny   and in_london_ny) or
+                 (use_london       and in_london)    or
+                 (use_ny           and in_ny)        or
+                 (use_tokyo        and in_tokyo)      or
+                 (use_sydney       and in_sydney)     or
+                 (use_sam_mon      and in_sam_mon)    or
+                 (use_sam_tueswed  and in_sam_tw)
+
+in_session = not use_session or (active_session and not is_weekend)
+
+bgcolor(show_sess_bg and in_london_ny                      ? color.new(color.green,  88) : na, title="London-NY Overlap")
+bgcolor(show_sess_bg and in_london and not in_london_ny    ? color.new(color.blue,   92) : na, title="London")
+bgcolor(show_sess_bg and in_ny     and not in_london_ny    ? color.new(color.aqua,   92) : na, title="New York")
+bgcolor(show_sess_bg and in_tokyo  and not in_london       ? color.new(color.orange, 93) : na, title="Tokyo")
+bgcolor(show_sess_bg and is_weekend                        ? color.new(color.gray,   85) : na, title="Weekend")
+
+// ─── PVSRA VOLUME (TR_PVSRA_VS logic) ────────────────────────────────────────
+show_vol_bars  = input.bool(true, "Show PVSRA Candle Colors",   group="PVSRA Volume")
+use_vol_filter = input.bool(true, "Require Volume on Entry",    group="PVSRA Volume")
+
+pvsra_rg_up  = input.color(color.lime,             "RG Vector: Bull (Lime)",  group="PVSRA Volume", inline="rg")
+pvsra_rg_dn  = input.color(color.red,              "Bear (Red)",              group="PVSRA Volume", inline="rg")
+pvsra_bv_up  = input.color(color.blue,             "BV Vector: Bull (Blue)",  group="PVSRA Volume", inline="bv")
+pvsra_bv_dn  = input.color(color.fuchsia,          "Bear (Violet)",           group="PVSRA Volume", inline="bv")
+pvsra_reg_up = input.color(color.rgb(153,153,153), "Regular: Bull (Gray)",    group="PVSRA Volume", inline="reg")
+pvsra_reg_dn = input.color(color.rgb(77, 77, 77),  "Bear (Dark Gray)",        group="PVSRA Volume", inline="reg")
+
+pvsra_avg   = ta.sma(volume, 10)
+spread_vol  = (high - low) * volume
+highest_sv  = ta.highest(spread_vol, 10)
+
+is_rg_vec   = volume >= pvsra_avg * 2.0 or spread_vol >= highest_sv
+is_bv_vec   = volume >= pvsra_avg * 1.5 and not is_rg_vec
+is_bull_bar = close >= open
+
+pvsra_col = (is_rg_vec and is_bull_bar  ? pvsra_rg_up  :
+             is_rg_vec                  ? pvsra_rg_dn  :
+             is_bv_vec and is_bull_bar  ? pvsra_bv_up  :
+             is_bv_vec                  ? pvsra_bv_dn  :
+             is_bull_bar                ? pvsra_reg_up :
+                                          pvsra_reg_dn)
+
+barcolor(show_vol_bars ? pvsra_col : na, title="PVSRA Volume Bars")
+
+vol_any_vector = is_rg_vec or is_bv_vec
+vol_ok         = not use_vol_filter or (volume >= pvsra_avg)
+vol_ratio      = pvsra_avg > 0 ? volume / pvsra_avg : 0.0
+
+// ─── EXIT SETTINGS ────────────────────────────────────────────────────────────
+gap_pct   = input.float(2.5, "Gap Away from 21 SMA % (Partial Exit)", group="Exit", minval=0.5, maxval=20, step=0.5)
+stoch_len = input.int(14,    "Stoch RSI Length",                       group="Exit")
+stoch_k   = input.int(3,     "Stoch RSI K",                            group="Exit")
+stoch_d   = input.int(3,     "Stoch RSI D",                            group="Exit")
+ob_level  = input.int(80,    "Overbought Level",                       group="Exit")
+
+// ─── GAP FROM 21 SMA ─────────────────────────────────────────────────────────
+gap_from_21     = math.abs(close - ma21) / ma21 * 100
+gapped_above_21 = close > ma21 and gap_from_21 >= gap_pct
+gapped_below_21 = close < ma21 and gap_from_21 >= gap_pct
+
+// ─── STOCHASTIC RSI ──────────────────────────────────────────────────────────
+rsi_val    = ta.rsi(close, stoch_len)
+stoch_raw  = ta.stoch(rsi_val, rsi_val, rsi_val, stoch_len)
+k          = ta.sma(stoch_raw, stoch_k)
+d          = ta.sma(k, stoch_d)
+overbought = k >= ob_level and d >= ob_level
+oversold   = k <= (100 - ob_level) and d <= (100 - ob_level)
+
+// ─── ENTRY CONDITIONS ────────────────────────────────────────────────────────
+touched_21_from_below = ta.crossover(close, ma21)
+touched_21_from_above = ta.crossunder(close, ma21)
+bars_since_200_cross  = ta.barssince(above_200_cross)
+
+entry_fireworks    = bull_bias and touched_21_from_below and bars_since_200_cross <= 10 and in_session and vol_ok
+entry_smooth_boost = bull_bias and above_smooth and touched_21_from_below and not entry_fireworks and in_session and vol_ok
+entry_pullback     = bull_bias and touched_21_from_below and not entry_fireworks and not entry_smooth_boost and in_session and vol_ok
+entry_short        = bear_bias and touched_21_from_above and in_session and vol_ok
+
+// ─── EXIT CONDITIONS ─────────────────────────────────────────────────────────
+exit_gap_profit  = gapped_above_21
+exit_overbought  = gapped_above_21 and overbought
+exit_bear_flip   = below_200_cross
+exit_short_cover = above_200_cross or (gapped_below_21 and oversold)
+
+// ─── SIGNALS ON CHART ────────────────────────────────────────────────────────
+plotshape(entry_fireworks,    title="Fireworks Buy",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.yellow, 0), size=size.normal, text="FIRE")
+plotshape(entry_smooth_boost, title="Smooth Boost",   style=shape.triangleup,   location=location.belowbar, color=color.new(color.teal,   0), size=size.normal, text="SMB", textcolor=color.rgb(0, 0, 200))
+plotshape(entry_pullback,     title="Pullback Buy",   style=shape.triangleup,   location=location.belowbar, color=color.new(color.green,  0), size=size.small,  text="21")
+plotshape(entry_short,        title="Short Entry",    style=shape.triangledown, location=location.abovebar, color=color.new(color.red,    0), size=size.small,  text="SHORT",  textcolor=color.white)
+plotshape(exit_overbought,    title="Gap+OB Sell",    style=shape.triangledown, location=location.abovebar, color=color.new(color.red,    0), size=size.small,  text="OB")
+plotshape(exit_gap_profit and not exit_overbought, title="Gap Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="GAP")
+plotshape(exit_bear_flip,     title="Bear Flip",      style=shape.xcross,       location=location.abovebar, color=color.new(color.red,    0), size=size.normal, text="BEAR",   textcolor=color.white)
+plotshape(above_smooth_cross, title="Above Smooth",   style=shape.diamond,      location=location.belowbar, color=color.new(color.teal,   0), size=size.tiny,   text="SMT",    textcolor=color.white)
+
+// ─── FIBONACCI LEVELS ────────────────────────────────────────────────────────
+show_fib = input.bool(true, "Show Fibonacci Levels", group="Fibonacci")
+lookback = input.int(50,    "Swing Lookback",         group="Fibonacci")
+
+swing_high   = ta.highest(high, lookback)
+swing_low    = ta.lowest(low,   lookback)
+fib_range    = swing_high - swing_low
+fib786_level = swing_high - fib_range * 0.786
+fib618_level = swing_high - fib_range * 0.618
+fib650_level = swing_high - fib_range * 0.650
+
+plot(show_fib ? fib786_level : na, "Fib 0.786",          color=color.new(color.orange, 40), style=plot.style_circles, linewidth=1)
+plot(show_fib ? fib618_level : na, "Fib 0.618 (GP Low)", color=color.new(color.lime,   40), style=plot.style_circles, linewidth=1)
+plot(show_fib ? fib650_level : na, "Fib 0.650 (GP High)",color=color.new(color.lime,   40), style=plot.style_circles, linewidth=1)
+
+// ─── HTF CANDLE OVERLAY (Future Space) ───────────────────────────────────────
+
+// ── Diagram 1 inputs
+show_htf1       = input.bool(true,  "Show Diagram 1",       group="HTF Overlay 1")
+htf1_res        = input.timeframe("60",  "Timeframe",        group="HTF Overlay 1")
+htf1_n          = input.int(3,  "No. of Candles",            group="HTF Overlay 1", minval=1, maxval=5)
+htf1_width      = input.int(5,  "Candle Width (bars)",       group="HTF Overlay 1", minval=1, maxval=30)
+htf1_spacing    = input.int(2,  "Spacing (bars)",            group="HTF Overlay 1", minval=0, maxval=20)
+htf1_offset     = input.int(60, "Gap from Last Bar (bars)",  group="HTF Overlay 1", minval=1, maxval=500)
+htf1_bull_col   = input.color(color.new(color.green, 20), "Bull", group="HTF Overlay 1", inline="h1c")
+htf1_bear_col   = input.color(color.new(color.black, 10), "Bear", group="HTF Overlay 1", inline="h1c")
+htf1_wick_col   = input.color(color.rgb(160, 160, 160),   "Wick", group="HTF Overlay 1")
+htf1_show_open  = input.bool(true,  "Open Line",             group="HTF Overlay 1")
+htf1_show_label = input.bool(true,  "TF Label",              group="HTF Overlay 1")
+
+// ── Diagram 2 inputs
+show_htf2       = input.bool(true,  "Show Diagram 2",       group="HTF Overlay 2")
+htf2_res        = input.timeframe("240", "Timeframe",        group="HTF Overlay 2")
+htf2_n          = input.int(3,  "No. of Candles",            group="HTF Overlay 2", minval=1, maxval=5)
+htf2_width      = input.int(5,  "Candle Width (bars)",       group="HTF Overlay 2", minval=1, maxval=30)
+htf2_spacing    = input.int(2,  "Spacing (bars)",            group="HTF Overlay 2", minval=0, maxval=20)
+htf2_offset     = input.int(82, "Gap from Last Bar (bars)",  group="HTF Overlay 2", minval=1, maxval=500)
+htf2_bull_col   = input.color(color.new(color.lime,   20), "Bull", group="HTF Overlay 2", inline="h2c")
+htf2_bear_col   = input.color(color.new(color.maroon, 10), "Bear", group="HTF Overlay 2", inline="h2c")
+htf2_wick_col   = input.color(color.rgb(200, 200, 200),   "Wick", group="HTF Overlay 2")
+htf2_show_open  = input.bool(true,  "Open Line",             group="HTF Overlay 2")
+htf2_show_label = input.bool(true,  "TF Label",              group="HTF Overlay 2")
+
+// Build human-readable labels from seconds (e.g. 3600s -> "1H", 14400s -> "4H")
+htf1_secs = timeframe.in_seconds(htf1_res)
+htf1_lbl  = if htf1_secs < 60
+    str.tostring(htf1_secs) + "s"
+else if htf1_secs < 3600
+    str.tostring(math.round(htf1_secs / 60)) + "m"
+else if htf1_secs < 86400
+    str.tostring(math.round(htf1_secs / 3600)) + "H"
+else
+    str.tostring(math.round(htf1_secs / 86400)) + "D"
+
+htf2_secs = timeframe.in_seconds(htf2_res)
+htf2_lbl  = if htf2_secs < 60
+    str.tostring(htf2_secs) + "s"
+else if htf2_secs < 3600
+    str.tostring(math.round(htf2_secs / 60)) + "m"
+else if htf2_secs < 86400
+    str.tostring(math.round(htf2_secs / 3600)) + "H"
+else
+    str.tostring(math.round(htf2_secs / 86400)) + "D"
+
+// ── Security calls — HTF 1
+[h1_o0, h1_h0, h1_l0, h1_c0] = request.security(syminfo.tickerid, htf1_res, [open,    high,    low,    close   ])
+[h1_o1, h1_h1, h1_l1, h1_c1] = request.security(syminfo.tickerid, htf1_res, [open[1], high[1], low[1], close[1]])
+[h1_o2, h1_h2, h1_l2, h1_c2] = request.security(syminfo.tickerid, htf1_res, [open[2], high[2], low[2], close[2]])
+[h1_o3, h1_h3, h1_l3, h1_c3] = request.security(syminfo.tickerid, htf1_res, [open[3], high[3], low[3], close[3]])
+[h1_o4, h1_h4, h1_l4, h1_c4] = request.security(syminfo.tickerid, htf1_res, [open[4], high[4], low[4], close[4]])
+
+// ── Security calls — HTF 2
+[h2_o0, h2_h0, h2_l0, h2_c0] = request.security(syminfo.tickerid, htf2_res, [open,    high,    low,    close   ])
+[h2_o1, h2_h1, h2_l1, h2_c1] = request.security(syminfo.tickerid, htf2_res, [open[1], high[1], low[1], close[1]])
+[h2_o2, h2_h2, h2_l2, h2_c2] = request.security(syminfo.tickerid, htf2_res, [open[2], high[2], low[2], close[2]])
+[h2_o3, h2_h3, h2_l3, h2_c3] = request.security(syminfo.tickerid, htf2_res, [open[3], high[3], low[3], close[3]])
+[h2_o4, h2_h4, h2_l4, h2_c4] = request.security(syminfo.tickerid, htf2_res, [open[4], high[4], low[4], close[4]])
+
+// ── Drawing pools
+var box[]   htf1_boxes  = array.new_box()
+var line[]  htf1_lines  = array.new_line()
+var label[] htf1_labels = array.new_label()
+var box[]   htf2_boxes  = array.new_box()
+var line[]  htf2_lines  = array.new_line()
+var label[] htf2_labels = array.new_label()
+
+// ── Render one HTF candle in future space
+draw_htf_candle(boxes, lines, labels, idx, o, h, l, c, cw, sp, off, bull_c, bear_c, wick_c, show_open, show_lbl, is_newest, tf_str) =>
+    is_bull  = c >= o
+    body_top = math.max(o, c)
+    body_bot = math.min(o, c)
+    l_bar    = bar_index + off + idx * (cw + sp)
+    r_bar    = l_bar + cw
+    mid      = math.round((l_bar + r_bar) / 2)
+    bc       = is_bull ? bull_c : bear_c
+
+    array.push(boxes, box.new(l_bar, body_top, r_bar, body_bot,
+                              bgcolor=bc, border_color=bc, xloc=xloc.bar_index))
+    if h > body_top
+        array.push(lines, line.new(mid, body_top, mid, h,
+                                   color=wick_c, width=2, xloc=xloc.bar_index))
+    if l < body_bot
+        array.push(lines, line.new(mid, body_bot, mid, l,
+                                   color=wick_c, width=2, xloc=xloc.bar_index))
+    if show_open
+        array.push(lines, line.new(l_bar, o, r_bar, o,
+                                   color=color.new(wick_c, 40),
+                                   style=line.style_dashed, xloc=xloc.bar_index))
+    if show_lbl and is_newest
+        array.push(labels, label.new(r_bar, h, " " + tf_str,
+                                     color=color.new(color.black, 100),
+                                     textcolor=wick_c, style=label.style_none,
+                                     size=size.small, xloc=xloc.bar_index))
+
+if barstate.islast
+    for b in htf1_boxes
+        box.delete(b)
+    array.clear(htf1_boxes)
+    for ln in htf1_lines
+        line.delete(ln)
+    array.clear(htf1_lines)
+    for lb in htf1_labels
+        label.delete(lb)
+    array.clear(htf1_labels)
+
+    if show_htf1
+        os1   = array.from(h1_o0, h1_o1, h1_o2, h1_o3, h1_o4)
+        hs1   = array.from(h1_h0, h1_h1, h1_h2, h1_h3, h1_h4)
+        ls1   = array.from(h1_l0, h1_l1, h1_l2, h1_l3, h1_l4)
+        cs1   = array.from(h1_c0, h1_c1, h1_c2, h1_c3, h1_c4)
+        n1max = math.min(htf1_n - 1, 4)
+        for i = 0 to n1max
+            di = n1max - i
+            draw_htf_candle(htf1_boxes, htf1_lines, htf1_labels,
+                            i,
+                            array.get(os1, di), array.get(hs1, di),
+                            array.get(ls1, di), array.get(cs1, di),
+                            htf1_width, htf1_spacing, htf1_offset,
+                            htf1_bull_col, htf1_bear_col, htf1_wick_col,
+                            htf1_show_open, htf1_show_label, i == n1max, htf1_lbl)
+
+    for b in htf2_boxes
+        box.delete(b)
+    array.clear(htf2_boxes)
+    for ln in htf2_lines
+        line.delete(ln)
+    array.clear(htf2_lines)
+    for lb in htf2_labels
+        label.delete(lb)
+    array.clear(htf2_labels)
+
+    if show_htf2
+        os2   = array.from(h2_o0, h2_o1, h2_o2, h2_o3, h2_o4)
+        hs2   = array.from(h2_h0, h2_h1, h2_h2, h2_h3, h2_h4)
+        ls2   = array.from(h2_l0, h2_l1, h2_l2, h2_l3, h2_l4)
+        cs2   = array.from(h2_c0, h2_c1, h2_c2, h2_c3, h2_c4)
+        n2max = math.min(htf2_n - 1, 4)
+        for i = 0 to n2max
+            di = n2max - i
+            draw_htf_candle(htf2_boxes, htf2_lines, htf2_labels,
+                            i,
+                            array.get(os2, di), array.get(hs2, di),
+                            array.get(ls2, di), array.get(cs2, di),
+                            htf2_width, htf2_spacing, htf2_offset,
+                            htf2_bull_col, htf2_bear_col, htf2_wick_col,
+                            htf2_show_open, htf2_show_label, i == n2max, htf2_lbl)
+
+// ─── RISK MANAGEMENT ─────────────────────────────────────────────────────────
+account_size   = input.float(10000, "Account Size (USD)",  group="Risk Management")
+risk_pct       = input.float(1.0,   "Risk Per Trade %",    group="Risk Management", minval=0.1, maxval=5,  step=0.1)
+rr_ratio       = input.float(3.0,   "Risk:Reward Target",  group="Risk Management", minval=1,   maxval=10, step=0.5)
+show_dashboard = input.bool(true,   "Show Risk Dashboard", group="Risk Management")
+
+risk_dollars   = account_size * (risk_pct / 100)
+stop_below_200 = ma200 * 0.999
+stop_dist_pct  = (close - stop_below_200) / close * 100
+tp_dist_pct    = stop_dist_pct * rr_ratio
+tp_price       = close * (1 + tp_dist_pct / 100)
+
+// ─── DASHBOARD (top right) ───────────────────────────────────────────────────
+c_hdr  = color.rgb(15,  35,  75)
+c_cell = color.rgb(28,  28,  40)
+c_val  = color.rgb(20,  20,  32)
+c_txt  = color.rgb(210, 210, 210)
+
+vol_state_str = (is_rg_vec and is_bull_bar  ? "RG VECTOR Bull" :
+                 is_rg_vec                  ? "RG VECTOR Bear" :
+                 is_bv_vec and is_bull_bar  ? "BV VECTOR Bull" :
+                 is_bv_vec                  ? "BV VECTOR Bear" :
+                 is_bull_bar                ? "Normal Bull"    :
+                                              "Normal Bear")
+
+vol_state_col = (is_rg_vec and is_bull_bar  ? pvsra_rg_up          :
+                 is_rg_vec                  ? pvsra_rg_dn          :
+                 is_bv_vec and is_bull_bar  ? pvsra_bv_up          :
+                 is_bv_vec                  ? pvsra_bv_dn          :
+                                              color.rgb(180,180,180))
+
+var table dashboard = table.new(position.top_right, 2, 10, border_width=1)
+
+if show_dashboard and barstate.islast
+    table.cell(dashboard, 0, 0, "RISK DASHBOARD",  text_color=color.white,           bgcolor=c_hdr,  text_size=size.small)
+    table.cell(dashboard, 1, 0, "",                                                   bgcolor=c_hdr)
+    table.cell(dashboard, 0, 1, "Account",          text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 1, "$" + str.tostring(account_size, "#,###"),            text_color=color.rgb(255,220,60), bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 2, "Risk/Trade",       text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 2, "$" + str.tostring(risk_dollars, "#.##"),             text_color=color.rgb(255,200,50), bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 3, "Stop (below 200)", text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 3, str.tostring(stop_below_200, "#.##"),                 text_color=color.rgb(255,90,90),  bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 4, "TP (" + str.tostring(rr_ratio) + ":1)", text_color=c_txt, bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 4, str.tostring(tp_price, "#.##"),                       text_color=color.rgb(80,230,80),  bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 5, "Gap from 21",      text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 5, str.tostring(gap_from_21, "#.##") + "%",              text_color=gapped_above_21 ? color.rgb(255,90,90) : color.rgb(80,230,80), bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 6, "Bias",             text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 6, bull_bias ? "BULL" : "BEAR",                          text_color=bull_bias ? color.rgb(80,230,80) : color.rgb(255,90,90), bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 7, "Session",          text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 7, in_london_ny ? "LDN-NY (BEST)" : in_london ? "London" : in_ny ? "New York" : in_tokyo ? "Tokyo" : in_sydney ? "Sydney" : is_weekend ? "WEEKEND" : "Off-Hours", text_color=in_london_ny ? color.rgb(80,230,80) : is_weekend ? color.rgb(255,90,90) : color.rgb(255,200,50), bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 8, "Volume",           text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 8, vol_state_str + " (" + str.tostring(vol_ratio, "#.##") + "x)", text_color=vol_state_col, bgcolor=c_val, text_size=size.small)
+    table.cell(dashboard, 0, 9, "Thu Risk",         text_color=c_txt,                 bgcolor=c_cell, text_size=size.small)
+    table.cell(dashboard, 1, 9, warn_thursday and is_thursday ? "CAUTION" : "OK",     text_color=warn_thursday and is_thursday ? color.rgb(255,170,50) : color.rgb(80,230,80), bgcolor=c_val, text_size=size.small)
+
+// ─── LEGEND (bottom left) ─────────────────────────────────────────────────────
+show_legend = input.bool(true, "Show Legend", group="Legend")
+
+var table legend = table.new(position.bottom_left, 3, 16, border_width=1)
+
+if show_legend and barstate.islast
+    c_lhdr  = color.rgb(15,  35,  75)
+    c_lrow  = color.rgb(28,  28,  40)
+    c_lval  = color.rgb(20,  20,  32)
+    c_ldesc = color.rgb(170, 170, 170)
+
+    table.cell(legend, 0, 0,  "SHAPE / COLOR",   text_color=color.white,            bgcolor=c_lhdr, text_size=size.small)
+    table.cell(legend, 1, 0,  "SIGNAL",           text_color=color.white,            bgcolor=c_lhdr, text_size=size.small)
+    table.cell(legend, 2, 0,  "MEANING",          text_color=color.white,            bgcolor=c_lhdr, text_size=size.small)
+
+    table.cell(legend, 0, 1,  "^ FIRE (yellow)",  text_color=color.yellow,           bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 1,  "Fireworks",        text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 1,  "Crossed 200 SMA recently (<10 bars) + now touching 21 SMA = STRONGEST long setup", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 2,  "^ SMB (teal)",     text_color=color.teal,             bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 2,  "Smooth Boost",     text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 2,  "Price above Smooth MA + touching 21 SMA = extended price target (113-118) possible", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 3,  "^ 21 (green)",     text_color=color.green,            bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 3,  "Pullback",         text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 3,  "Standard pullback to 21 SMA while above 200 SMA = normal long entry", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 4,  "v SHORT (red)",    text_color=color.red,              bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 4,  "Short Entry",      text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 4,  "Price crosses back below 21 SMA while below 200 SMA = short setup", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 5,  "v OB (red)",       text_color=color.red,              bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 5,  "Gap + OB Full Exit",text_color=color.rgb(210,210,210),bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 5,  "Gapped 2.5%+ from 21 SMA AND Stoch RSI K+D >= 80 = CLOSE ALL positions", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 6,  "v GAP (orange)",   text_color=color.orange,           bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 6,  "Partial Exit 75%", text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 6,  "Price gapped 2.5%+ from 21 SMA = take 75% profit, let 25% runner ride", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 7,  "X BEAR (red)",     text_color=color.red,              bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 7,  "Bear Flip Kill",   text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 7,  "Price crossed below 200 SMA = macro bias flipped BEAR, CLOSE ALL LONGS immediately", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 8,  "* SMT (teal)",     text_color=color.teal,             bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 8,  "Smooth MA Cross",  text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 8,  "Price just crossed above Smooth MA = extension target (above smooth MA level) now in play", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 9,  "o Orange dots",    text_color=color.orange,           bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 9,  "Fib 0.786",        text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 9,  "Deep retracement (78.6%) of swing range = last strong support before trend invalidation", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 10, "o Lime dots",      text_color=color.lime,             bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 10, "Golden Pocket",    text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 10, "Fib 0.618 to 0.650 zone = highest-probability pullback entry / support area", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 11, "LIME candle",      text_color=color.lime,             bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 11, "RG Bull Vector",   text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 11, "Vol >= 200% of avg OR spread*vol is highest in 10 bars + UP close = strong buying (strongest signal)", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 12, "RED candle",       text_color=color.red,              bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 12, "RG Bear Vector",   text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 12, "Vol >= 200% of avg OR spread*vol is highest in 10 bars + DOWN close = strong selling (strongest signal)", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 13, "BLUE candle",      text_color=color.blue,             bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 13, "BV Bull Vector",   text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 13, "Vol >= 150% of avg (but < 200%) + UP close = elevated buying pressure (secondary signal)", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 14, "FUCHSIA candle",   text_color=color.fuchsia,          bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 14, "BV Bear Vector",   text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 14, "Vol >= 150% of avg (but < 200%) + DOWN close = elevated selling pressure (secondary signal)", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+    table.cell(legend, 0, 15, "GRAY candle",      text_color=color.rgb(160,160,160), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 1, 15, "Regular Bar",      text_color=color.rgb(210,210,210), bgcolor=c_lrow, text_size=size.small)
+    table.cell(legend, 2, 15, "Normal volume (< 150% avg) - light gray = up, dark gray = down, no institutional footprint", text_color=c_ldesc, bgcolor=c_lval, text_size=size.tiny)
+
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+alertcondition(entry_fireworks,    "Fireworks Entry",         "FIREWORKS - Crossed 200 recently, now touching 21. Strong long setup.")
+alertcondition(entry_smooth_boost, "Smooth Boost Entry",      "SMOOTH BOOST - Above smooth MA + touching 21. Extended target possible.")
+alertcondition(entry_pullback,     "Pullback to 21",          "21 SMA Touch - Pullback to 21 above 200. Standard long entry.")
+alertcondition(entry_short,        "Short Entry",             "SHORT SETUP - Touching 21 below 200. Potential short entry.")
+alertcondition(exit_gap_profit,    "Gap Away - Take Profits", "Gapped away from 21 SMA. Take partial or full profits.")
+alertcondition(exit_bear_flip,     "Bear Flip",               "200 SMA broken. Macro bias flipped bearish. Close longs.")
+alertcondition(above_smooth_cross, "Above Smooth MA",         "Price crossed above Smooth MA. High probability of continuation.")
+alertcondition(is_rg_vec,          "RG Vector Alert",         "RG VECTOR - Volume >= 200% avg or highest spread*vol. Strongest signal.")
+alertcondition(is_bv_vec,          "BV Vector Alert",         "BV VECTOR - Volume >= 150% avg. Elevated participation.")

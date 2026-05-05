@@ -75,7 +75,6 @@ stoch_d_len  = input.int(3,  "D Smoothing", group=grp_stoch, minval=1)
 stoch_sm_len = input.int(3,  "K Smoothing", group=grp_stoch, minval=1)
 
 stoch_k = ta.sma(ta.stoch(close, high, low, stoch_k_len), stoch_sm_len)
-stoch_d = ta.sma(stoch_k, stoch_d_len)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRE-TRADE CHECKLIST SETTINGS
@@ -363,6 +362,11 @@ if n_lvl > 0
         if expired
             line.set_color(pln,  color.new(color.black, 100))
             label.set_color(plb, color.new(color.black, 100))
+            if hva
+                line.set_color(array.get(st_vhln, i),  color.new(color.black, 100))
+                line.set_color(array.get(st_vlln, i),  color.new(color.black, 100))
+                label.set_color(array.get(st_vhlb, i), color.new(color.black, 100))
+                label.set_color(array.get(st_vllb, i), color.new(color.black, 100))
         else if done
             if show_filled
                 line.set_color(pln,  filled_col)

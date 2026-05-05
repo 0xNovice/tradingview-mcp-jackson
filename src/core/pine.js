@@ -275,9 +275,29 @@ export async function getSource() {
   return { success: true, source, line_count: source.split('\n').length, char_count: source.length };
 }
 
-export async function setSource({ source }) {
+export async function setSource({ source, overwrite_existing = false }) {
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  // Safety: refuse to overwrite a saved cloud script unless caller opts in explicitly.
+  // An open saved script has a non-empty title AND a version number in the editor header.
+  if (!overwrite_existing) {
+    const openScript = await evaluate(`
+      (function() {
+        var header = document.querySelector('[class*="pine-editor"] [class*="scriptName"], [class*="pineEditorTabs"] [class*="scriptName"]');
+        var title = header ? header.textContent.trim() : null;
+        var isUntitled = !title || /untitled/i.test(title) || title === '';
+        var versionEl = document.querySelector('[class*="pine-editor"] [class*="version"], [class*="pineEditorTabs"] [class*="version"]');
+        return { title, isUntitled };
+      })()
+    `);
+    if (openScript && !openScript.isUntitled && openScript.title) {
+      throw new Error(
+        `setSource refused: Pine editor has saved script "${openScript.title}" open. ` +
+        `Call newScript() first to get a blank slot, or pass overwrite_existing=true to force.`
+      );
+    }
+  }
 
   // Primary path: React fiber → Monaco setValue()
   const escaped = JSON.stringify(source);
@@ -415,7 +435,7 @@ export async function compile() {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!fallback && /^(Add to chart|Update on chart)/i.test(text)) {
+        if (!fallback && /(Add to chart|Update on chart)/i.test(text)) {
           fallback = btns[i];
         }
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
@@ -571,8 +591,8 @@ export async function smartCompile() {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!addBtn && /^add to chart$/i.test(text)) addBtn = btns[i];
-        if (!updateBtn && /^update on chart$/i.test(text)) updateBtn = btns[i];
+        if (!addBtn && /add to chart/i.test(text)) addBtn = btns[i];
+        if (!updateBtn && /update on chart/i.test(text)) updateBtn = btns[i];
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) saveBtn = btns[i];
       }
       if (addBtn) { addBtn.click(); return 'Add to chart'; }

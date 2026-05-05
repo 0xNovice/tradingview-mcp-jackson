@@ -1,0 +1,229 @@
+================================================================================
+  CRYPTO LIFER INDICATOR — COMPLETE LEGEND
+  Sam Price "Twisted Sister" System
+  File: tradingview-mcp-jackson/scripts/crypto_lifer_indicator.pine
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+  MOVING AVERAGE LINES (on price chart)
+────────────────────────────────────────────────────────────────────────────────
+
+  WHITE line  (21 SMA)    — Primary entry/exit trigger. Price crossing above =
+                            long signal. Price crossing below = exit/short signal.
+                            The "Twisted Sister" line — most important line.
+
+  YELLOW line (200 SMA)   — Macro bias line. THE key dividing line.
+                            Close ABOVE 200 = Bull bias (green background).
+                            Close BELOW 200 = Bear bias (red background).
+                            Stop loss goes just below this line (200 × 0.999).
+
+  TEAL line   (Smooth MA) — SMMA/RMA(50). Sam's "smooth moving average."
+                            When price is ABOVE it = "Smooth Boost" territory,
+                            extended price targets become possible (113-118% range).
+                            Stop for extended targets goes below this line.
+
+  RED line    (50 SMA)    — Intermediate structure / trend filter.
+
+  BLUE line   (100 SMA)   — Deeper support reference.
+
+  PURPLE line (800 SMA)   — Deep macro support. Long-term structure.
+
+────────────────────────────────────────────────────────────────────────────────
+  BACKGROUND COLORS (chart backdrop)
+────────────────────────────────────────────────────────────────────────────────
+
+  FAINT GREEN background  — Bull bias. Close is above the 200 SMA.
+                            Only take LONG trades in this zone.
+
+  FAINT RED background    — Bear bias. Close is below the 200 SMA.
+                            Only take SHORT trades (or stay flat).
+
+  BRIGHT GREEN bg (session) — London-NY Overlap (8am-12pm EST). Best session.
+                               Highest liquidity, Sam's primary trading window.
+
+  FAINT BLUE bg (session)  — London Session only (3am-8am EST, before NY opens).
+
+  FAINT AQUA bg (session)  — New York Session only (12pm-5pm EST, after London closes).
+
+  FAINT ORANGE bg          — Tokyo/Asia Session (if enabled). Lower priority.
+
+  GRAY bg                  — Weekend. No trades. Markets are thin.
+
+────────────────────────────────────────────────────────────────────────────────
+  SIGNAL SHAPES (plotted on price chart)
+────────────────────────────────────────────────────────────────────────────────
+
+  TRIANGLE UP — YELLOW — text "FIRE"     = FIREWORKS ENTRY (STRONGEST)
+    Condition: Bull bias (above 200) + price crossed ABOVE 21 SMA + the 200 SMA
+               cross happened within the last 10 bars + in active session.
+    Action:    Highest conviction long entry. Price just crossed the 200 and is
+               now touching the 21. Fresh momentum. Enter long here.
+               Stop: just below 200 SMA. Target: 3:1 R:R minimum.
+
+  TRIANGLE UP — TEAL — text "SMB"        = SMOOTH BOOST ENTRY
+    Condition: Bull bias + price is ABOVE the Smooth MA + touched 21 SMA from
+               below + in session.
+    Action:    Extended target setup. Same entry as pullback but with a higher
+               price target possible (above the Smooth MA level = 113-118 zone).
+               Sam calls this the "smooth boost" — price already showing strength.
+
+  TRIANGLE UP — GREEN — text "21"        = STANDARD PULLBACK ENTRY
+    Condition: Bull bias + price crossed above 21 SMA + in session.
+               (Not a Fireworks or Smooth Boost setup — normal pullback.)
+    Action:    Standard long entry. Price pulled back to the 21 SMA in an
+               uptrend. Default R:R target is 3:1.
+
+  TRIANGLE DOWN — RED — text "SHORT"     = SHORT ENTRY
+    Condition: Bear bias (below 200 SMA) + price crossed BELOW 21 SMA + session.
+    Action:    Short setup. Mirror of the long pullback but on the bear side.
+               Cover when: price crosses back above 200 SMA, OR gapped below
+               21 AND Stoch RSI is oversold.
+
+  TRIANGLE DOWN — RED — text "OB"        = GAP + OVERBOUGHT FULL EXIT
+    Condition: Price is 2.5%+ away from the 21 SMA AND Stoch RSI K and D both
+               >= 80 (overbought).
+    Action:    CLOSE ALL of the position. Both the gap AND overbought = best
+               exit combination. Do not hold through this signal.
+
+  TRIANGLE DOWN — ORANGE — text "GAP"    = PARTIAL EXIT (75%)
+    Condition: Price has gapped 2.5%+ away from the 21 SMA (but Stoch RSI is
+               NOT yet overbought — otherwise the OB signal fires instead).
+    Action:    Take 75% of the position off the table. Keep 25% as a runner.
+               The runner rides until: price returns to entry (breakeven), OR
+               the OB signal fires, OR the Bear Flip kill switch triggers.
+               Note: Gap % threshold is adjustable — Sam suggests tuning per TF:
+                 4H chart   → 3-5% gap
+                 15m chart  → 1.5-2% gap
+                 5m chart   → 1% gap
+
+  X CROSS — RED — text "BEAR"            = BEAR FLIP KILL SWITCH
+    Condition: Price crossed BELOW the 200 SMA.
+    Action:    CLOSE ALL LONG POSITIONS IMMEDIATELY. No questions asked.
+               Macro bias has flipped to bearish. This is the kill switch.
+               Sam: if price breaks the 200, the trend is over for longs.
+
+  DIAMOND — TEAL (tiny) — text "SMT"     = SMOOTH MA CROSS
+    Condition: Price just crossed ABOVE the Smooth MA (teal line).
+    Action:    Not an entry signal by itself — a context signal. This tells you
+               the Smooth Boost entry type is now available IF price pulls back
+               to the 21 SMA. Extended targets are now in play above the smooth
+               MA level. Watch for SMB triangle to appear on next 21 SMA touch.
+
+────────────────────────────────────────────────────────────────────────────────
+  FIBONACCI DOTS (price levels plotted as dot lines)
+────────────────────────────────────────────────────────────────────────────────
+
+  ORANGE dots — Fib 0.786  — Deep retracement level (78.6% pullback of swing range).
+                              Last major support before the swing low is taken out.
+                              If price drops to this level, the trend structure is
+                              being severely tested. A bounce here is the final
+                              "last chance" entry before the setup is invalidated.
+
+  LIME dots   — Fib 0.618  — Golden Pocket LOW. The start of the high-probability
+                              entry zone. This is where the majority of healthy
+                              pullbacks find support in a strong uptrend.
+
+  LIME dots   — Fib 0.650  — Golden Pocket HIGH. The top of the Golden Pocket zone.
+                              Together with 0.618, these two lime dot lines form the
+                              "GP Zone" — Sam's preferred area for 21 SMA pullback
+                              entries when they align with the GP zone simultaneously.
+
+  Swing lookback = 50 bars (adjustable). The fibs are drawn from the highest high
+  to the lowest low over that lookback period.
+
+────────────────────────────────────────────────────────────────────────────────
+  PVSRA VOLUME CANDLE COLORS (ported from TR_PVSRA_VS — Traders Reality)
+────────────────────────────────────────────────────────────────────────────────
+
+  HOW PVSRA WORKS:
+  The volume of each bar is compared to a 10-bar SMA of volume AND the
+  "spread × volume" product (candle range × volume = total participation).
+  This identifies when institutional money is active (vectors) vs when
+  retail/low-participation is trading (regular bars).
+
+  TWO VECTOR TIERS:
+
+  ── RG VECTOR (Red/Green — STRONGEST signal) ──
+    Condition: volume >= 200% of 10-bar avg volume
+               OR (high - low) × volume >= highest of that product over last 10 bars
+    Meaning:   Extreme volume OR the highest candle-spread participation in 10 bars.
+               These are the bars where institutions/whales are most active.
+
+    LIME GREEN candle = RG Vector + Bull bar (close >= open)
+    → Strong institutional BUYING. High conviction. Look for entries in direction.
+    → On a 21 SMA touch: this is the ideal entry confirmation.
+
+    RED candle = RG Vector + Bear bar (close < open)
+    → Strong institutional SELLING. High conviction. Watch out — may signal reversal.
+    → On a 21 SMA break below: confirms the downward pressure.
+
+  ── BV VECTOR (Blue/Violet — SECONDARY signal) ──
+    Condition: volume >= 150% of 10-bar avg volume (but NOT an RG vector)
+    Meaning:   Elevated but not extreme volume. Above-average institutional
+               participation. A supporting signal, not as strong as RG.
+
+    BLUE candle = BV Vector + Bull bar
+    → Elevated buying, secondary confirmation. Decent entry bar signal.
+
+    FUCHSIA (violet/magenta) candle = BV Vector + Bear bar
+    → Elevated selling, secondary. Watch if price is at key levels.
+
+  ── REGULAR BARS (no vector) ──
+    LIGHT GRAY candle (#999999) = Regular Bull bar (close >= open, low volume)
+    → Normal volume upbar. No institutional footprint. Retail/noise activity.
+
+    DARK GRAY candle (#4d4d4d) = Regular Bear bar (close < open, low volume)
+    → Normal volume downbar. No institutional footprint. Retail/noise activity.
+
+  READING PVSRA IN CONTEXT:
+    • Entry on 21 SMA touch with a LIME candle → very high conviction long
+    • Entry on 21 SMA touch with a BLUE candle → good confirmation, take it
+    • Entry on 21 SMA touch with GRAY candle  → marginal, wait for next bar or skip
+    • RED/FUCHSIA candle at a resistance level → potential reversal warning
+    • RED candle breaking below 200 SMA       → bear flip confirmed, close all
+
+────────────────────────────────────────────────────────────────────────────────
+  RISK DASHBOARD (table — top right corner)
+────────────────────────────────────────────────────────────────────────────────
+
+  Account       — Your account size in USD (set in inputs)
+  Risk/Trade    — Dollar risk per trade (Account × Risk %)
+  Stop (below 200) — Current stop loss price (200 SMA × 0.999)
+  TP (3:1)      — Take profit price at current risk:reward ratio
+  Gap from 21   — How far price is from the 21 SMA (%). Green = not gapped,
+                  Red = already at or past the partial exit threshold
+  Bias          — BULL (green) or BEAR (red) — macro bias vs 200 SMA
+  Session       — Current trading session. "LDN-NY (BEST)" = prime time
+  Volume        — Current PVSRA vector state + volume ratio vs 10-bar avg
+                  (e.g., "RG VECTOR Bull (2.3x)" = RG vector at 2.3× average)
+  Thu Risk      — CAUTION on Thursdays (Sam flags these as higher risk days)
+
+────────────────────────────────────────────────────────────────────────────────
+  TRADE DECISION FRAMEWORK (combining all signals)
+────────────────────────────────────────────────────────────────────────────────
+
+  IDEAL LONG SETUP checklist:
+    [1] Background is GREEN (bull bias — above 200 SMA)
+    [2] Session bg is BRIGHT GREEN (London-NY overlap) or at least in a session
+    [3] Price touches or crosses above the WHITE 21 SMA line
+    [4] Triangle signal appears: FIRE (best) > SMB > 21 (good > ok)
+    [5] Candle at the 21 touch is LIME or BLUE (PVSRA vector confirms)
+    [6] Dashboard shows BULL bias and active session
+    [7] If present, the 21 touch aligns with the LIME Golden Pocket zone
+
+  TAKE PROFITS:
+    [GAP signal appears]  → Close 75%, let 25% runner ride
+    [OB signal appears]   → Close everything
+    [BEAR X appears]      → Close everything, no questions asked
+
+  DO NOT TRADE:
+    → Gray background (weekend)
+    → BEAR red background (unless shorting)
+    → No session active
+    → BEAR X (X cross) just appeared — reset required
+
+================================================================================
+  Last updated: 2026-05-04
+  Strategy by: Sam Price (Crypto Lifer / Twisted Sister)
+  Indicator file: crypto_lifer_indicator.pine (v4, PVSRA merged)
+================================================================================
